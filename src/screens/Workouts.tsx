@@ -147,7 +147,11 @@ function SortableExercise({ ex, title, onPatch, onRemove }: { ex: TemplateExerci
         <div className="field grow"><label>Rest</label><NumberField value={ex.restSec} suffix="sec" onChange={n => onPatch({ restSec: n ?? 60 })} /></div>
         <div className="field grow"><label>Warm-up sets</label><NumberField value={ex.warmupSets ?? 0} onChange={n => onPatch({ warmupSets: n ?? 0 })} /></div>
       </div>
-      <div className="field"><label>Starting weight (used until you've logged it once)</label><WeightInput kg={ex.startWeight} onChange={kg => onPatch({ startWeight: kg ?? 0 })} /></div>
+      <div className="row">
+        <div className="field grow"><label>Starting weight</label><WeightInput kg={ex.startWeight || undefined} placeholder="ask on day 1" onChange={kg => onPatch({ startWeight: kg ?? 0 })} /></div>
+        <div className="field grow"><label>Weight step</label><WeightInput kg={ex.increment} placeholder="e.g. 2.5" onChange={kg => onPatch({ increment: kg })} /></div>
+      </div>
+      <p className="tiny muted">Leave starting weight empty and you'll pick it in your first session. The step pre-fills weight increases (e.g. +5 on a pin-loaded stack).</p>
       <div className="field"><label>Machine / equipment note</label><input className="input" placeholder="e.g. Hammer Strength, seat 4" value={ex.machineNote ?? ''} onChange={e => onPatch({ machineNote: e.target.value || undefined })} /></div>
     </div>
   );

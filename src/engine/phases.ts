@@ -64,6 +64,8 @@ export function analyzePlateau(
   basis: ProgressionBasis,
   today: string,
   windowDays = 14,
+  /** In a cut, holding strength counts as success. */
+  cutting = false,
 ): PlateauAnalysis {
   const from = addDays(today, -(windowDays - 1));
   const inWindow = (at: number) => ymd(at) >= from;
@@ -79,7 +81,9 @@ export function analyzePlateau(
     const before = es.filter(e => !inWindow(e.at));
     const baseline = before.length ? before[before.length - 1] : win[0];
     const latest = win[win.length - 1];
+    const held = latest.weight >= baseline.weight && latest.achieved >= baseline.achieved;
     const didProgress =
+      (cutting && held) ||
       latest.weight > baseline.weight ||
       (latest.weight === baseline.weight && latest.achieved > baseline.achieved) ||
       latest.achieved >= latest.repMax;
@@ -114,7 +118,9 @@ export function analyzePlateau(
       ? 'Not enough training data in the last 2 weeks to judge.'
       : recommendDeload
         ? 'Looks like a plateau — deload recommended.'
-        : "You're still progressing — keep going.",
+        : cutting
+          ? "You're holding your strength in a cut — that's the goal. Keep going."
+          : "You're still progressing — keep going.",
   };
 }
 

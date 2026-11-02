@@ -31,3 +31,27 @@ export function fmtClock(sec: number): string {
   const s = Math.max(0, Math.ceil(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
+
+export const CM_PER_IN = 2.54;
+
+export function toLen(cm: number, units: 'cm' | 'in'): number {
+  return units === 'in' ? Math.round((cm / CM_PER_IN) * 10) / 10 : Math.round(cm * 10) / 10;
+}
+
+export function fromLen(v: number, units: 'cm' | 'in'): number {
+  return units === 'in' ? v * CM_PER_IN : v;
+}
+
+export function fmtLen(cm: number, units: 'cm' | 'in'): string {
+  return `${toLen(cm, units)}${units === 'in' ? '"' : 'cm'}`;
+}
+
+/** Bodyweight with one decimal. */
+export function fmtBw(kg: number, units: 'kg' | 'lb'): string {
+  return `${toUnit(kg, units).toFixed(1)}${units}`;
+}
+
+export function fmtRateW(kgPerWeek: number, units: 'kg' | 'lb'): string {
+  const v = units === 'lb' ? kgPerWeek * LB_PER_KG : kgPerWeek;
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}${units}/wk`;
+}

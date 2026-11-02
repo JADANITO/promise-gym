@@ -1,8 +1,26 @@
-import type { CoachReport, DailyCheckIn, Goals, Phase, Settings, WorkoutSession, WorkoutTemplate } from '../types';
+import type { CoachReport, DailyCheckIn, Exercise, Measurement, NutritionPhase, Phase, Profile, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate } from '../types';
 import { achievedReps, computeProgress } from './progression';
 import { analyzePlateau, phaseWeek, plateauCheckDue } from './phases';
-import { addDays, ymd } from './dates';
-import { calories, goalProgress, mean } from './stats';
+import { addDays, daysBetween, weekStart, ymd } from './dates';
+import { mean } from './stats';
+import { composition, phaseStatus, targetFor } from './body';
+import { promisesFor, setsPerMuscle, volumeRange } from './schedule';
+import { TRACKED_MUSCLES, muscleLabel } from '../data/library';
+
+export interface CoachInput {
+  sessions: WorkoutSession[];
+  templates: WorkoutTemplate[];
+  checkIns: Record<string, DailyCheckIn>;
+  profile: Profile;
+  measurements: Measurement[];
+  weeklyTargets: WeeklyTarget[];
+  weeklyCheckIns: WeeklyCheckIn[];
+  settings: Settings;
+  trainingBlock?: Phase;
+  nutritionPhase?: NutritionPhase;
+  exercises: Exercise[];
+  name: (id: string) => string;
+}
 
 /** Everything the coach looks at for one week, as plain data (also what's sent to the AI). */
 export interface WeekStats {
@@ -10,30 +28,28 @@ export interface WeekStats {
   weekEnd: string;
   workoutsDone: number;
   workoutsPlanned: number;
-  phase: string;
+  trainingBlock: string;
   deloadDue: boolean;
-  exercises: {
-    name: string;
-    outcome: 'progressed' | 'weight-up' | 'held' | 'failed' | 'not trained';
-    detail: string;
-    failedStreak: number;
-  }[];
-  bodyweight: { current: number | null; changeThisWeek: number | null; goal?: number; goalDate?: string; direction: string; status: string; advice: string; calorieAdjust: number | null };
-  calories: { average: number | null; target?: number; daysLogged: number; daysOnTarget: number };
-  avgRpe: number | null;
+  rampUp: boolean;
+  exercises: { name: string; outcome: 'progressed' | 'weight-up' | 'held' | 'failed' | 'not trained'; detail: string; failedStreak: number }[];
+  nutritionPhase: { type: string; week: number; targetRateKgPerWeek: number; actualRateKgPerWeek: number | null; status: string; advice: string } | null;
+  body: { weight: number | null; bodyFatEstimate: number | null; waistChangeSincePhaseStartCm: number | null; goalWeight: number; goalBodyFat: number };
+  calories: { target: number | null; maintenanceEstimate: number | null; average: number | null; daysLogged: number };
+  protein: { target: number | null; average: number | null; daysLogged: number; daysHit: number };
+  recovery: { avgSleep: number | null; avgEnergy: number | null; lowSleepNights: number };
+  volume: { muscle: string; sets: number; range: [number, number] }[];
+  promisesKept: { kept: number; total: number };
   notes: string[];
 }
 
-export function buildWeekStats(
-  input: { sessions: WorkoutSession[]; templates: WorkoutTemplate[]; checkIns: Record<string, DailyCheckIn>; goals: Goals; settings: Settings; phase?: Phase; name: (id: string) => string },
-  today: string,
-): WeekStats {
-  const { sessions, checkIns, goals, settings, phase, name } = input;
-  const weekStart = addDays(today, -6);
-  const inWeek = (at: number) => ymd(at) >= weekStart && ymd(at) <= today;
+export function buildWeekStats(input: CoachInput, today: string): WeekStats {
+  const { sessions, checkIns, settings, trainingBlock, nutritionPhase, profile, name } = input;
+  const from = addDays(today, -6);
+  const inWeek = (at: number) => ymd(at) >= from && ymd(at) <= today;
   const week = sessions.filter(s => inWeek(s.startedAt));
-  const before = sessions.filter(s => ymd(s.startedAt) < weekStart);
+  const before = sessions.filter(s => ymd(s.startedAt) < from);
   const ci = Object.values(checkIns);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
 
   const ids = new Set<string>();
   input.templates.filter(t => !t.archived).forEach(t => t.exercises.forEach(e => ids.add(e.exerciseId)));
@@ -58,52 +74,56 @@ export function buildWeekStats(
     else if (!prev.last || reps > prev.last.achieved || now.increaseDue) outcome = 'progressed';
     else outcome = 'held';
     exercises.push({
-      name: name(id),
-      outcome,
+      name: name(id), outcome, failedStreak: now.failedCount,
       detail: `${+w.toFixed(2)}kg × ${reps} (range ${last.repMin}–${last.repMax})${prev.last ? `, previously ${+prev.last.weight.toFixed(2)}kg × ${prev.last.achieved}` : ''}`,
-      failedStreak: now.failedCount,
     });
   }
 
-  const gp = goalProgress(ci, goals, today);
-  const ws = ci.filter(c => c.bodyweight != null && c.date >= addDays(weekStart, -7)).sort((a, b) => a.date.localeCompare(b.date));
-  const thisWeek = ws.filter(c => c.date >= weekStart).map(c => c.bodyweight!);
-  const lastWeek = ws.filter(c => c.date < weekStart).map(c => c.bodyweight!);
-  const change = thisWeek.length && lastWeek.length ? mean(thisWeek)! - mean(lastWeek)! : null;
-
-  const kc = calories(ci).filter(p => p.date >= weekStart && p.date <= today);
-  const target = goals.calorieTarget;
-  const rpes = week.flatMap(s => s.exercises.flatMap(e => e.sets.filter(x => x.completed && !x.warmup && x.rpe != null).map(x => x.rpe!)));
+  const comp = composition(profile, ci, input.measurements, today);
+  const target = targetFor(input.weeklyTargets, today) ?? null;
+  const ps = nutritionPhase ? phaseStatus(nutritionPhase, ci, today) : null;
+  const lastWaist = [...input.measurements].sort((a, b) => b.date.localeCompare(a.date))[0];
+  const kc = days.map(d => checkIns[d]?.calories).filter((v): v is number => v != null);
+  const pr = days.map(d => checkIns[d]?.protein).filter((v): v is number => v != null);
+  const sleep = days.map(d => checkIns[d]?.sleep).filter((v): v is number => v != null);
+  const energy = days.map(d => checkIns[d]?.energy).filter((v): v is number => v != null);
+  const vol = setsPerMuscle(sessions, input.exercises, from, today);
+  const promises = promisesFor({ settings, sessions, checkIns, weekly: input.weeklyCheckIns, target: target ?? undefined, today, weekOf: weekStart(today) });
+  const r1 = (n: number | null | undefined) => (n == null ? null : Math.round(n * 10) / 10);
   const notes = [
     ...week.flatMap(s => s.exercises.flatMap(e => e.sets.filter(x => x.note).map(x => `${name(e.exerciseId)}: ${x.note}`))),
-    ...ci.filter(c => c.notes && c.date >= weekStart).map(c => `${c.date}: ${c.notes}`),
+    ...ci.filter(c => c.notes && c.date >= from).map(c => `${c.date}: ${c.notes}`),
   ];
 
   return {
-    weekStart,
+    weekStart: from,
     weekEnd: today,
     workoutsDone: week.length,
     workoutsPlanned: settings.workoutsPerWeek,
-    phase: phase ? `${phase.type === 'deload' ? 'Deload week' : `Gaining phase ${phase.number}`}, week ${phaseWeek(phase, today)}` : 'No phase',
-    deloadDue: plateauCheckDue(phase, today) && analyzePlateau(sessions, ci, settings.basis, today).recommendDeload,
+    trainingBlock: trainingBlock ? `${trainingBlock.type === 'deload' ? 'Deload week' : `Training block ${trainingBlock.number}`}, week ${phaseWeek(trainingBlock, today)}` : 'None',
+    deloadDue: plateauCheckDue(trainingBlock, today) && analyzePlateau(sessions, ci, settings.basis, today, 14, nutritionPhase?.type === 'cut').recommendDeload,
+    rampUp: !!settings.rampUntil && today <= settings.rampUntil,
     exercises,
-    bodyweight: {
-      current: gp.current == null ? null : +gp.current.toFixed(1),
-      changeThisWeek: change == null ? null : +change.toFixed(2),
-      goal: goals.goalWeight,
-      goalDate: goals.goalDate,
-      direction: goals.direction,
-      status: gp.status,
-      advice: gp.advice,
-      calorieAdjust: gp.calorieAdjust,
+    nutritionPhase: nutritionPhase && ps ? {
+      type: nutritionPhase.type,
+      week: Math.floor(daysBetween(nutritionPhase.startDate, today) / 7) + 1,
+      targetRateKgPerWeek: nutritionPhase.targetRate,
+      actualRateKgPerWeek: r1(ps.actual),
+      status: ps.status,
+      advice: ps.advice,
+    } : null,
+    body: {
+      weight: r1(comp?.weight),
+      bodyFatEstimate: r1(comp?.bodyFat),
+      waistChangeSincePhaseStartCm: lastWaist && nutritionPhase?.startWaistCm != null ? r1(lastWaist.waistCm - nutritionPhase.startWaistCm) : null,
+      goalWeight: profile.goalWeight,
+      goalBodyFat: profile.goalBodyFat,
     },
-    calories: {
-      average: mean(kc.map(p => p.value)) == null ? null : Math.round(mean(kc.map(p => p.value))!),
-      target,
-      daysLogged: kc.length,
-      daysOnTarget: target ? kc.filter(p => Math.abs(p.value - target) <= target * 0.1).length : 0,
-    },
-    avgRpe: mean(rpes) == null ? null : +mean(rpes)!.toFixed(1),
+    calories: { target: target?.kcal ?? null, maintenanceEstimate: target?.maintenance ?? null, average: kc.length ? Math.round(mean(kc)!) : null, daysLogged: kc.length },
+    protein: { target: target?.protein ?? null, average: pr.length ? Math.round(mean(pr)!) : null, daysLogged: pr.length, daysHit: target ? pr.filter(p => p >= target.protein * 0.9).length : 0 },
+    recovery: { avgSleep: r1(mean(sleep)), avgEnergy: r1(mean(energy)), lowSleepNights: sleep.filter(x => x <= 2).length },
+    volume: TRACKED_MUSCLES.map(m => ({ muscle: muscleLabel(m), sets: Math.round((vol[m] ?? 0) * 10) / 10, range: volumeRange(m) })),
+    promisesKept: { kept: promises.kept, total: promises.total },
     notes,
   };
 }
@@ -115,52 +135,54 @@ export function rulesReport(s: WeekStats): Advice {
   const trained = s.exercises.filter(e => e.outcome !== 'not trained');
   const up = trained.filter(e => e.outcome === 'progressed' || e.outcome === 'weight-up');
   const failed = trained.filter(e => e.failedStreak >= 2);
-  const held = trained.filter(e => e.outcome === 'held' || e.outcome === 'failed');
+  const cutting = s.nutritionPhase?.type === 'cut';
+  const heldInCut = cutting ? trained.filter(e => e.outcome === 'held') : [];
 
   const parts = [`${s.workoutsDone} of ${s.workoutsPlanned} workouts`];
-  if (trained.length) parts.push(`${up.length} of ${trained.length} exercises progressed`);
-  if (s.bodyweight.changeThisWeek != null) parts.push(`weight ${s.bodyweight.changeThisWeek <= 0 ? 'down' : 'up'} ${Math.abs(s.bodyweight.changeThisWeek)}kg`);
-  const good = s.workoutsDone >= s.workoutsPlanned && up.length >= trained.length / 2;
+  if (trained.length) parts.push(cutting ? `${up.length + heldInCut.length} of ${trained.length} lifts held or improved` : `${up.length} of ${trained.length} exercises progressed`);
+  if (s.nutritionPhase?.actualRateKgPerWeek != null) parts.push(`weight ${s.nutritionPhase.actualRateKgPerWeek >= 0 ? '+' : ''}${s.nutritionPhase.actualRateKgPerWeek}kg/week`);
+  const good = s.workoutsDone >= s.workoutsPlanned && (up.length + heldInCut.length) >= trained.length / 2;
   const summary = `${good ? 'Solid week' : s.workoutsDone === 0 ? 'Quiet week' : 'Mixed week'}: ${parts.join(', ')}.`;
 
   const wins: string[] = [];
-  s.exercises.filter(e => e.outcome === 'weight-up').forEach(e => wins.push(`${e.name}: moved up in weight — ${e.detail.split(',')[0]}.`));
-  s.exercises.filter(e => e.outcome === 'progressed').slice(0, 3).forEach(e => wins.push(`${e.name}: more reps — ${e.detail.split(',')[0]}.`));
-  if (s.workoutsDone >= s.workoutsPlanned) wins.push(`Hit all ${s.workoutsPlanned} planned sessions. That's the promise kept.`);
-  if (s.bodyweight.status === 'on-track') wins.push('Bodyweight is on track for your goal.');
+  s.exercises.filter(e => e.outcome === 'weight-up').slice(0, 2).forEach(e => wins.push(`${e.name}: moved up in weight — ${e.detail.split(',')[0]}.`));
+  s.exercises.filter(e => e.outcome === 'progressed').slice(0, 2).forEach(e => wins.push(`${e.name}: more reps — ${e.detail.split(',')[0]}.`));
+  if (cutting && heldInCut.length) wins.push(`Held strength on ${heldInCut.length} lifts while dieting — that's muscle kept.`);
+  if (s.workoutsDone >= s.workoutsPlanned) wins.push(`Hit all ${s.workoutsPlanned} planned sessions. Promise kept.`);
+  if (s.nutritionPhase?.status === 'on-track') wins.push('Bodyweight is moving exactly as planned.');
+  if (s.protein.target && s.protein.daysHit >= 6) wins.push(`Protein target hit ${s.protein.daysHit} of 7 days.`);
   if (!wins.length) wins.push(s.workoutsDone ? 'You showed up. Build on it this week.' : 'Nothing logged yet — this week is a clean slate.');
 
   const changes: string[] = [];
   for (const e of failed.slice(0, 2)) {
-    changes.push(`${e.name} has been below your rep range ${e.failedStreak} sessions running. Drop the weight 5–10% and rebuild to the top of the range — or check sleep and food first.`);
+    changes.push(`${e.name} has been below your rep range ${e.failedStreak} sessions running. Drop the weight 5–10% and rebuild to the top of the range.`);
   }
   if (s.deloadDue) changes.push('Most lifts have stalled over two weeks. Take the deload week — you will come back stronger.');
   if (s.workoutsDone < s.workoutsPlanned) {
-    changes.push(`You trained ${s.workoutsDone} of ${s.workoutsPlanned} times. Put the sessions in your calendar now — treat them like appointments.`);
+    changes.push(`You trained ${s.workoutsDone} of ${s.workoutsPlanned} times. If a day doesn't work, move it on the week planner rather than skipping it.`);
   }
-  const { average, target, daysLogged } = s.calories;
-  if (target && average != null) {
-    const off = average - target;
-    if (Math.abs(off) > target * 0.1) {
-      const stalling = held.length > up.length;
-      changes.push(`You averaged ${average.toLocaleString()} kcal against a ${target.toLocaleString()} target. ${off < 0 && stalling ? 'Strength is stalling, so eat closer to target.' : off < 0 ? 'Eat closer to target to fuel your training.' : 'Tighten up to hit your target.'}`);
-    }
+  if (s.nutritionPhase && s.nutritionPhase.status !== 'on-track' && s.nutritionPhase.status !== 'unknown') changes.push(s.nutritionPhase.advice);
+  if (s.protein.target && s.protein.daysLogged >= 3 && (s.protein.average ?? 0) < s.protein.target * 0.9) {
+    changes.push(`Protein averaged ${s.protein.average}g vs ${s.protein.target}g. Add a shake or an extra portion of meat/Greek yoghurt daily — it's the cheapest muscle insurance there is.`);
   }
-  if (daysLogged < 5) changes.push(`Calories logged on only ${daysLogged} of 7 days. Log every evening — you can't adjust what you don't track.`);
-  if (s.bodyweight.calorieAdjust && (s.bodyweight.status === 'behind' || s.bodyweight.status === 'too-fast')) {
-    const adj = s.bodyweight.calorieAdjust;
-    changes.push(s.bodyweight.status === 'too-fast'
-      ? `You're losing weight faster than planned — add about ${adj} kcal/day to protect muscle.`
-      : `To get back on track for your goal, ${adj > 0 ? 'add' : 'cut'} about ${Math.abs(adj)} kcal/day.`);
+  const low = s.volume.filter(v => v.sets < v.range[0] && s.workoutsDone >= Math.max(1, s.workoutsPlanned - 1));
+  if (low.length) changes.push(`Low volume this week: ${low.slice(0, 3).map(v => `${v.muscle} ${v.sets} sets (aim ${v.range[0]}+)`).join(', ')}. Add a set or two to those exercises.`);
+  const high = s.volume.filter(v => v.sets > v.range[1]);
+  if (high.length) changes.push(`Very high volume: ${high.map(v => `${v.muscle} ${v.sets} sets`).join(', ')}. More isn't better past ~20 — trim a set and push intensity.`);
+  if (s.recovery.avgSleep != null && (s.recovery.avgSleep < 3 || s.recovery.lowSleepNights >= 3)) {
+    changes.push(`Sleep averaged ${s.recovery.avgSleep}/5 with ${s.recovery.lowSleepNights} poor nights. Muscle is built while you sleep — aim for 7–9 hours before chasing more weight.`);
   }
-  if (s.avgRpe != null && s.avgRpe >= 9.5) changes.push(`Average RPE was ${s.avgRpe}. You are grinding every set — leave 1 rep in the tank on the first sets.`);
+  if (s.calories.daysLogged < 4 && s.calories.target) changes.push(`Calories logged on ${s.calories.daysLogged} of 7 days. Even rough logs let me fine-tune your target — I'm steering by the scale until then.`);
+  if (s.rampUp) changes.push('You are still in the ramp-up weeks: beat your targets and the app jumps 2 reps at a time. Leave 1–2 reps in the tank.');
   if (!changes.length) changes.push('Keep everything the same. The plan is working — beat last week by one rep.');
 
   const focus = failed.length
-    ? 'Reset the stuck lifts, nail the basics, and the numbers will move again.'
-    : up.length
-      ? 'Momentum is on your side. One more rep, every session.'
-      : 'Show up for every planned session this week. Nothing else matters until that is done.';
+    ? 'Reset the stuck lifts, nail sleep and protein, and the numbers will move again.'
+    : cutting
+      ? 'Hold the weights, hit protein, trust the deficit. The muscle stays.'
+      : up.length
+        ? 'Momentum is on your side. One more rep, every session.'
+        : 'Show up for every planned session this week. Nothing else matters until that is done.';
 
   return { summary, wins: wins.slice(0, 4), changes: changes.slice(0, 4), focus };
 }

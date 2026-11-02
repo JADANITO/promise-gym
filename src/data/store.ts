@@ -2,13 +2,16 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { del, get, set } from 'idb-keyval';
 import type {
-  CoachReport, DailyCheckIn, Exercise, Goals, LoggedExercise, LoggedSet, Phase, Settings,
-  TemplateExercise, WorkoutSession, WorkoutTemplate,
+  CoachReport, DailyCheckIn, Exercise, LoggedExercise, LoggedSet, Measurement, Muscle, NutritionPhase,
+  NutritionPhaseType, Phase, Photo, Profile, Settings, TemplateExercise, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate,
 } from '../types';
 import { computeProgress, planExercise, targetAfterIncrease } from '../engine/progression';
 import { deloadFinished, deloadPrescription, roundTo } from '../engine/phases';
 import { ymd } from '../engine/dates';
+import { plannedPerWeek } from '../engine/schedule';
 import { BUILT_IN_EXERCISES, slug } from './library';
+import { buildStarterProgram } from './program';
+import { deletePhotoBlob, savePhotoBlob } from './photos';
 import { fmtW, uid } from '../format';
 
 export interface ActiveExercise extends LoggedExercise {
@@ -18,6 +21,9 @@ export interface ActiveExercise extends LoggedExercise {
   flagged: boolean;
   /** The user has answered the "increase the weight" prompt for this session. */
   increaseHandled?: boolean;
+  /** First time doing this exercise: ask for a starting weight. */
+  firstWeight?: boolean;
+  increment?: number;
 }
 
 export interface ActiveWorkout {
@@ -41,6 +47,9 @@ export const DEFAULT_SETTINGS: Settings = {
   deloadSetFactor: 0.5,
   weightRounding: 2.5,
   workoutsPerWeek: 4,
+  schedule: [null, null, null, null, null, null, null],
+  scheduleOverrides: {},
+  lengthUnits: 'in',
   weighInTime: '07:30',
   caloriesTime: '21:00',
   coachDay: 0,
@@ -57,7 +66,12 @@ interface Data {
   sessions: WorkoutSession[];
   phases: Phase[];
   checkIns: Record<string, DailyCheckIn>;
-  goals: Goals;
+  profile: Profile;
+  nutritionPhases: NutritionPhase[];
+  measurements: Measurement[];
+  weeklyTargets: WeeklyTarget[];
+  weeklyCheckIns: WeeklyCheckIn[];
+  photos: Photo[];
   reports: CoachReport[];
   settings: Settings;
   active: ActiveWorkout | null;
@@ -69,7 +83,7 @@ interface Actions {
   // library
   exercises: () => Exercise[];
   exerciseName: (id: string) => string;
-  addCustomExercise: (name: string) => Exercise;
+  addCustomExercise: (name: string, primary?: Muscle[]) => Exercise;
   // templates
   saveTemplate: (t: WorkoutTemplate) => void;
   deleteTemplate: (id: string) => void;
@@ -97,8 +111,20 @@ interface Actions {
   answerPlateau: (plateaued: boolean) => void;
   endDeloadEarly: () => void;
   currentPhase: () => Phase | undefined;
+  // body & plan
+  setProfile: (p: Partial<Profile>) => void;
+  currentNutritionPhase: () => NutritionPhase | undefined;
+  startNutritionPhase: (type: NutritionPhaseType, targetRate: number, reason: string, startWeight?: number, startWaistCm?: number) => void;
+  addMeasurement: (m: Measurement) => void;
+  setWeeklyTarget: (t: WeeklyTarget) => void;
+  completeWeeklyCheckIn: (c: WeeklyCheckIn) => void;
+  addPhoto: (blob: Blob, pose: Photo['pose'], date: string) => Promise<Photo>;
+  deletePhoto: (id: string) => Promise<void>;
+  // schedule
+  loadStarterProgram: () => void;
+  setScheduleDay: (dow: number, templateId: string | null) => void;
+  setOverride: (date: string, templateId: string | null | undefined) => void;
   // misc
-  setGoals: (g: Partial<Goals>) => void;
   setSettings: (s: Partial<Settings>) => void;
   addReport: (r: CoachReport) => void;
   markNotified: (key: string, date: string) => void;
@@ -115,7 +141,12 @@ const initialData: Data = {
   sessions: [],
   phases: [],
   checkIns: {},
-  goals: { direction: 'lose' },
+  profile: { goalWeight: 0, goalBodyFat: 12, bulkCeiling: 16 },
+  nutritionPhases: [],
+  measurements: [],
+  weeklyTargets: [],
+  weeklyCheckIns: [],
+  photos: [],
   reports: [],
   settings: DEFAULT_SETTINGS,
   active: null,
@@ -140,7 +171,7 @@ function makeSets(count: number, weight: number, target: number, warmups = 0, ro
 }
 
 function toLogged(e: ActiveExercise): LoggedExercise {
-  const { baseWeight: _b, reason: _r, flagged: _f, increaseHandled: _h, ...rest } = e;
+  const { baseWeight: _b, reason: _r, flagged: _f, increaseHandled: _h, firstWeight: _fw, increment: _i, ...rest } = e;
   const anyDone = rest.sets.some(s => s.completed && !s.warmup);
   return { ...rest, skipped: rest.skipped || !anyDone };
 }
@@ -155,11 +186,21 @@ export const useStore = create<Store>()(
           return copy;
         });
 
-      const buildExercise = (te: Pick<TemplateExercise, 'exerciseId' | 'sets' | 'repMin' | 'repMax' | 'restSec' | 'startWeight' | 'machineNote' | 'warmupSets'>, holdTargets: boolean, deload: boolean): ActiveExercise => {
+      const buildExercise = (te: Pick<TemplateExercise, 'exerciseId' | 'sets' | 'repMin' | 'repMax' | 'restSec' | 'startWeight' | 'machineNote' | 'warmupSets' | 'increment'>, holdTargets: boolean, deload: boolean): ActiveExercise => {
         const { sessions, settings } = getState();
         const state = computeProgress(te.exerciseId, sessions, settings.basis, te.startWeight, te.repMin);
         const plan = planExercise(state, te, { holdTargets, fmt: kg => fmtW(kg, settings.units) });
         let weight = plan.weight, target = plan.target, sets = te.sets, reason = plan.reason, increaseDue = plan.increaseDue;
+        const ramp = !!settings.rampUntil && ymd() <= settings.rampUntil;
+        const firstWeight = !state.last && !te.startWeight;
+        if (firstWeight) {
+          increaseDue = true;
+          reason = ramp
+            ? `First session back: pick a weight you could do for ~3 more reps than ${target}. Muscle memory will move it up fast.`
+            : `First time: pick a weight you could do for ~2 more reps than ${target}.`;
+        } else if (ramp && !deload) {
+          reason += ' Ramp-up: beat the target and you jump 2 reps next time.';
+        }
         if (deload) {
           const d = deloadPrescription(plan.weight, te.sets, settings);
           weight = d.weight; sets = d.sets; target = te.repMin; increaseDue = false;
@@ -177,10 +218,13 @@ export const useStore = create<Store>()(
           increasePrompted: increaseDue,
           countsForProgression: true,
           skipped: false,
+          ramp: ramp && !deload ? true : undefined,
           sets: makeSets(sets, weight, target, te.warmupSets ?? 0, settings.weightRounding),
           baseWeight: weight,
           reason,
           flagged: plan.flagged,
+          firstWeight: firstWeight || undefined,
+          increment: te.increment,
         };
       };
 
@@ -189,10 +233,10 @@ export const useStore = create<Store>()(
 
         exercises: () => [...BUILT_IN_EXERCISES, ...getState().customExercises].sort((a, b) => a.name.localeCompare(b.name)),
         exerciseName: id => getState().exercises().find(e => e.id === id)?.name ?? id,
-        addCustomExercise: name => {
+        addCustomExercise: (name, primary) => {
           const existing = getState().exercises().find(e => e.name.toLowerCase() === name.trim().toLowerCase());
           if (existing) return existing;
-          const ex: Exercise = { id: `${slug(name)}-${uid().slice(-4)}`, name: name.trim(), custom: true };
+          const ex: Exercise = { id: `${slug(name)}-${uid().slice(-4)}`, name: name.trim(), custom: true, primary };
           mutate(d => { d.customExercises.push(ex); });
           return ex;
         },
@@ -315,6 +359,7 @@ export const useStore = create<Store>()(
                     restSec: le.restSec,
                     startWeight: old?.startWeight ?? le.workingWeight,
                     machineNote: le.machineNote,
+                    increment: old?.increment,
                   };
                 });
               }
@@ -379,7 +424,41 @@ export const useStore = create<Store>()(
           d.phases.push({ id: uid(), type: 'gaining', number: n, startDate: today, minWeeks: d.settings.minPhaseWeeks, status: 'active' });
         }),
 
-        setGoals: g => mutate(d => { d.goals = { ...d.goals, ...g }; }),
+        setProfile: p => mutate(d => { d.profile = { ...d.profile, ...p }; }),
+        currentNutritionPhase: () => getState().nutritionPhases.find(p => p.status === 'active'),
+        startNutritionPhase: (type, targetRate, reason, startWeight, startWaistCm) => mutate(d => {
+          const today = ymd();
+          d.nutritionPhases.forEach(p => { if (p.status === 'active') { p.status = 'completed'; p.endDate = today; } });
+          d.nutritionPhases.push({ id: uid(), type, startDate: today, status: 'active', targetRate, reason, startWeight, startWaistCm });
+        }),
+        addMeasurement: m => mutate(d => { d.measurements = [...d.measurements.filter(x => x.date !== m.date), m].sort((a, b) => a.date.localeCompare(b.date)); }),
+        setWeeklyTarget: t => mutate(d => { d.weeklyTargets = [...d.weeklyTargets.filter(x => x.weekStart !== t.weekStart), t].sort((a, b) => a.weekStart.localeCompare(b.weekStart)); }),
+        completeWeeklyCheckIn: c => mutate(d => { d.weeklyCheckIns = [...d.weeklyCheckIns.filter(x => x.date !== c.date), c].sort((a, b) => a.date.localeCompare(b.date)); }),
+        addPhoto: async (blob, pose, date) => {
+          const photo: Photo = { id: uid(), date, pose };
+          await savePhotoBlob(photo.id, blob);
+          mutate(d => { d.photos.push(photo); });
+          return photo;
+        },
+        deletePhoto: async id => {
+          await deletePhotoBlob(id);
+          mutate(d => { d.photos = d.photos.filter(p => p.id !== id); });
+        },
+
+        loadStarterProgram: () => mutate(d => {
+          const { templates, schedule } = buildStarterProgram();
+          d.templates.push(...templates);
+          d.settings.schedule = schedule;
+          d.settings.workoutsPerWeek = plannedPerWeek(schedule);
+        }),
+        setScheduleDay: (dow, templateId) => mutate(d => {
+          d.settings.schedule[dow] = templateId;
+          d.settings.workoutsPerWeek = Math.max(1, plannedPerWeek(d.settings.schedule));
+        }),
+        setOverride: (date, templateId) => mutate(d => {
+          if (templateId === undefined) delete d.settings.scheduleOverrides[date];
+          else d.settings.scheduleOverrides[date] = templateId;
+        }),
         setSettings: s => mutate(d => {
           d.settings = { ...d.settings, ...s };
           if (s.minPhaseWeeks) d.phases.forEach(p => { if (p.status === 'active' && p.type === 'gaining') p.minWeeks = s.minPhaseWeeks!; });
@@ -389,7 +468,7 @@ export const useStore = create<Store>()(
 
         exportData: () => {
           const d = pickData(getState());
-          return JSON.stringify({ app: 'promise', version: 1, exportedAt: new Date().toISOString(), data: { ...d, settings: { ...d.settings, anthropicKey: undefined } } }, null, 2);
+          return JSON.stringify({ app: 'promise', version: 2, exportedAt: new Date().toISOString(), data: { ...d, active: null, timer: null, settings: { ...d.settings, anthropicKey: undefined, gistToken: undefined } } }, null, 2);
         },
         importData: json => {
           const parsed = JSON.parse(json);
@@ -397,8 +476,13 @@ export const useStore = create<Store>()(
           if (parsed?.app !== 'promise' || !data || !Array.isArray(data.sessions) || !Array.isArray(data.templates)) {
             throw new Error("That file isn't a Promise backup.");
           }
-          const key = getState().settings.anthropicKey;
-          setState({ ...initialData, ...data, settings: { ...DEFAULT_SETTINGS, ...data.settings, anthropicKey: key }, active: null, timer: null });
+          const { anthropicKey, gistToken, gistId } = getState().settings;
+          setState({
+            ...initialData, ...data,
+            profile: { ...initialData.profile, ...data.profile },
+            settings: { ...DEFAULT_SETTINGS, ...data.settings, anthropicKey, gistToken, gistId: data.settings?.gistId ?? gistId },
+            active: null, timer: null,
+          });
         },
         resetAll: () => setState({ ...structuredClone(initialData) }),
       };
@@ -409,7 +493,7 @@ export const useStore = create<Store>()(
       partialize: s => pickData(s),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<Data>;
-        return { ...current, ...p, settings: { ...DEFAULT_SETTINGS, ...p.settings } };
+        return { ...current, ...p, profile: { ...initialData.profile, ...p.profile }, settings: { ...DEFAULT_SETTINGS, ...p.settings } };
       },
     },
   ),
@@ -422,7 +506,12 @@ function pickData(s: Data): Data {
     sessions: s.sessions,
     phases: s.phases,
     checkIns: s.checkIns,
-    goals: s.goals,
+    profile: s.profile,
+    nutritionPhases: s.nutritionPhases,
+    measurements: s.measurements,
+    weeklyTargets: s.weeklyTargets,
+    weeklyCheckIns: s.weeklyCheckIns,
+    photos: s.photos,
     reports: s.reports,
     settings: s.settings,
     active: s.active,

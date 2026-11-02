@@ -187,3 +187,10 @@ it('Epley e1RM', () => {
   expect(e1rm(100, 10)).toBeCloseTo(133.33, 1);
   expect(e1rm(100, 0)).toBe(0);
 });
+
+describe('return-to-training ramp', () => {
+  it('climbs two reps at a time during the ramp', () => {
+    expect(plan([session(le(35, 10, [10, 10, 10], { ramp: true }))]).target).toBe(12);
+    expect(plan([session(le(35, 10, [10, 10, 10]))]).target).toBe(11);
+  });
+});

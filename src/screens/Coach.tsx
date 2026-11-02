@@ -2,20 +2,28 @@ import { useState } from 'react';
 import { useStore } from '../data/store';
 import { buildWeekStats, rulesReport } from '../engine/coach';
 import { addDays, fmtDate, ymd } from '../engine/dates';
-import { uid } from '../format';
+import { PHASE_LABEL, planSnapshot } from '../data/plan';
+import { PHASE_COLOR, Roadmap } from '../components/plan';
+import { fmtBw, fmtRateW, uid } from '../format';
 import type { CoachReport } from '../types';
 
 /** Build this week's report: Claude when a key is set and we're online, otherwise the rules coach. */
 export async function generateReport(): Promise<{ report: CoachReport; warning?: string }> {
   const s = useStore.getState();
   const today = ymd();
-  const stats = buildWeekStats({ sessions: s.sessions, templates: s.templates, checkIns: s.checkIns, goals: s.goals, settings: s.settings, phase: s.currentPhase(), name: s.exerciseName }, today);
+  const stats = buildWeekStats({
+    sessions: s.sessions, templates: s.templates, checkIns: s.checkIns, profile: s.profile, measurements: s.measurements,
+    weeklyTargets: s.weeklyTargets, weeklyCheckIns: s.weeklyCheckIns, settings: s.settings, trainingBlock: s.currentPhase(),
+    nutritionPhase: s.currentNutritionPhase(), exercises: s.exercises(), name: s.exerciseName,
+  }, today);
   const statsSummary = {
     workouts: `${stats.workoutsDone}/${stats.workoutsPlanned}`,
     progressed: stats.exercises.filter(e => e.outcome === 'progressed' || e.outcome === 'weight-up').length,
     exercises: stats.exercises.filter(e => e.outcome !== 'not trained').length,
     avgCalories: stats.calories.average ?? '—',
-    weightChange: stats.bodyweight.changeThisWeek ?? '—',
+    avgProtein: stats.protein.average ?? '—',
+    weightRate: stats.nutritionPhase?.actualRateKgPerWeek ?? '—',
+    promises: `${stats.promisesKept.kept}/${stats.promisesKept.total}`,
   };
   let warning: string | undefined;
   let advice = null;
@@ -35,12 +43,18 @@ export async function generateReport(): Promise<{ report: CoachReport; warning?:
   return { report, warning };
 }
 
-export function CoachScreen() {
-  const reports = useStore(s => s.reports);
+export function CoachScreen({ go }: { go: (r: string) => void }) {
+  const s = useStore();
+  const reports = s.reports;
   const [busy, setBusy] = useState(false);
   const [warning, setWarning] = useState<string>();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showRoadmap, setShowRoadmap] = useState(false);
   const latest = reports[0];
+  const plan = planSnapshot(s);
+  const u = s.settings.units;
+  const goal = plan.roadmap[plan.roadmap.length - 1];
+  const currentStep = plan.roadmap[0];
 
   const run = async () => {
     setBusy(true);
@@ -50,15 +64,54 @@ export function CoachScreen() {
 
   return (
     <div className="stack">
+      <h1 className="page-title">Coach</h1>
+
+      {plan.phase ? (
+        <div className="card stack" style={{ borderColor: PHASE_COLOR[plan.phase.type] }}>
+          <div className="row between">
+            <p className="small muted bold">MY PLAN</p>
+            {goal?.type === 'goal' && <span className="pill accent">Goal ~{new Date(goal.startDate).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</span>}
+          </div>
+          <h2 className="bold" style={{ fontSize: 22 }}>
+            {PHASE_LABEL[plan.phase.type]} · week {plan.weeksIn + 1}{currentStep && currentStep.type === plan.phase.type ? ` of ~${plan.weeksIn + currentStep.weeks}` : ''}
+          </h2>
+          <p className="small muted">{plan.phase.reason}</p>
+          <div className="stats">
+            <div className="stat"><div className="v">{plan.target ? plan.target.kcal.toLocaleString() : '—'}</div><div className="l">kcal / day</div></div>
+            <div className="stat"><div className="v">{plan.target ? `${plan.target.protein}g` : '—'}</div><div className="l">protein / day</div></div>
+            <div className="stat"><div className="v" style={{ fontSize: 16 }}>{fmtRateW(plan.phase.targetRate, u)}</div><div className="l">target rate</div></div>
+          </div>
+          {plan.target && <p className="tiny muted">{plan.target.note}</p>}
+          {plan.status && <p className="small">{plan.status.advice}</p>}
+          {plan.comp && (
+            <p className="small">
+              Now ~{fmtBw(plan.comp.weight, u)} at ~{plan.comp.bodyFat.toFixed(1)}% · lean mass ~{fmtBw(plan.comp.lean, u)}
+              {s.profile.goalWeight ? ` · goal ${fmtBw(s.profile.goalWeight, u)} at ${s.profile.goalBodyFat}%` : ''}
+            </p>
+          )}
+          <div className="row">
+            <button className="btn sm grow" onClick={() => setShowRoadmap(v => !v)}>{showRoadmap ? 'Hide roadmap' : 'Show roadmap'}</button>
+            <button className="btn sm grow" onClick={() => go('checkin')}>Weekly check-in</button>
+          </div>
+          {showRoadmap && <Roadmap steps={plan.roadmap} />}
+        </div>
+      ) : (
+        <div className="card accent stack">
+          <p className="bold">No plan yet</p>
+          <p className="small muted">Tell me where you are and where you want to be, and I'll plan your bulks, cuts, goal date and weekly targets.</p>
+          <button className="btn primary" onClick={() => go('setup')}>Set up my plan</button>
+        </div>
+      )}
+
       <div className="row between">
-        <h1 className="page-title">Coach</h1>
+        <h2 className="section-title">Weekly reports</h2>
         <button className="btn primary sm" disabled={busy} onClick={run}>{busy ? 'Thinking…' : 'Review my week'}</button>
       </div>
       {warning && <p className="small" style={{ color: 'var(--warn)' }}>{warning}</p>}
       {!latest && !busy && (
         <div className="card stack">
           <p className="bold">Your weekly review lands here</p>
-          <p className="muted small">Every week I'll look at your lifts, bodyweight and calories and tell you what to change for the week ahead. Tap “Review my week” any time.</p>
+          <p className="muted small">Every Sunday check-in I'll look at your lifts, volume, bodyweight, protein, sleep and calories and tell you what to change for the week ahead.</p>
         </div>
       )}
       {latest && <ReportCard r={latest} />}

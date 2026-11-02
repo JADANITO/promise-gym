@@ -98,7 +98,8 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const setIncrease = useStore(s => s.setIncreaseWeight);
   const last = useLastTime(ex.exerciseId);
   const [sheet, setSheet] = useState<null | 'weight' | 'rest' | 'swap' | { setId: string }>(null);
-  const [incKg, setIncKg] = useState<number | undefined>();
+  // Pre-fill the next weight from this machine's increment; the user can always change it.
+  const [incKg, setIncKg] = useState<number | undefined>(ex.firstWeight ? undefined : ex.increment ? ex.baseWeight + ex.increment : undefined);
   const title = name(ex.exerciseId);
   const working = ex.sets.filter(s => !s.warmup);
   const needsNewWeight = ex.increasePrompted && !ex.increaseHandled;
@@ -142,14 +143,17 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
 
       {needsNewWeight ? (
         <div className="banner stack">
-          <div>You hit the top of your range last time, so increase the weight today.</div>
+          <div>{ex.firstWeight ? ex.reason : 'You hit the top of your range last time, so increase the weight today.'}</div>
+          {!ex.firstWeight && ex.increment ? <div className="small">Pre-filled +{fmtW(ex.increment, units)} (this machine's step) — change it if needed.</div> : null}
           <div className="row">
-            <div className="grow" style={{ color: 'var(--text)' }}><WeightInput kg={incKg} onChange={setIncKg} /></div>
+            <div className="grow" style={{ color: 'var(--text)' }}><WeightInput kg={incKg} onChange={setIncKg} placeholder={ex.firstWeight ? 'Starting weight' : undefined} /></div>
             <button className="btn" style={{ background: 'var(--bg)', color: 'var(--text)' }} disabled={incKg == null} onClick={() => incKg != null && setIncrease(ex.id, incKg)}>Set</button>
           </div>
-          <button className="btn sm ghost" style={{ color: 'var(--accent-ink)', borderColor: 'var(--accent-ink)' }} onClick={() => setIncrease(ex.id, ex.workingWeight)}>
-            Keep {fmtW(ex.workingWeight, units)} for now
-          </button>
+          {!ex.firstWeight && (
+            <button className="btn sm ghost" style={{ color: 'var(--accent-ink)', borderColor: 'var(--accent-ink)' }} onClick={() => setIncrease(ex.id, ex.workingWeight)}>
+              Keep {fmtW(ex.workingWeight, units)} for now
+            </button>
+          )}
         </div>
       ) : (
         <div className="reason">{ex.reason}</div>

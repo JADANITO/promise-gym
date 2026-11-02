@@ -98,7 +98,8 @@ export function applySession(
       next.increaseDue = true;
       break;
     case 'progressed':
-      next.target = Math.min(achieved + 1, repMax);
+      // During the return-to-training ramp, muscle memory lets you climb two reps at a time.
+      next.target = Math.min(achieved + (le.ramp ? 2 : 1), repMax);
       break;
     case 'repeat':
       next.target = target;

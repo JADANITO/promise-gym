@@ -2,12 +2,19 @@
 
 export type ProgressionBasis = 'lowest' | 'first' | 'average';
 export type Units = 'kg' | 'lb';
-export type GoalDirection = 'lose' | 'gain' | 'maintain';
+export type LengthUnits = 'cm' | 'in';
+
+export type Muscle =
+  | 'chest' | 'back' | 'side-delts' | 'rear-delts' | 'front-delts' | 'biceps' | 'triceps'
+  | 'quads' | 'hamstrings' | 'glutes' | 'calves' | 'abs' | 'traps' | 'forearms';
 
 export interface Exercise {
   id: string;
   name: string;
   custom?: boolean;
+  /** Muscles worked: primary count as 1 set, secondary as half a set. */
+  primary?: Muscle[];
+  secondary?: Muscle[];
 }
 
 export interface TemplateExercise {
@@ -20,6 +27,8 @@ export interface TemplateExercise {
   startWeight: number;
   machineNote?: string;
   warmupSets?: number;
+  /** Smallest weight jump on this machine/implement (kg), used to pre-fill weight increases. */
+  increment?: number;
 }
 
 export interface WorkoutTemplate {
@@ -58,6 +67,8 @@ export interface LoggedExercise {
   /** False when a one-off machine/weight override was used and declined as the new working weight. */
   countsForProgression: boolean;
   skipped: boolean;
+  /** Logged during the return-to-training ramp: progress two reps at a time. */
+  ramp?: boolean;
   sets: LoggedSet[];
 }
 
@@ -89,14 +100,70 @@ export interface DailyCheckIn {
   date: string; // YYYY-MM-DD
   bodyweight?: number;
   calories?: number;
+  protein?: number;
+  /** 1–5 */
+  sleep?: number;
+  /** 1–5 */
+  energy?: number;
   notes?: string;
 }
 
-export interface Goals {
-  goalWeight?: number;
-  goalDate?: string;
-  direction: GoalDirection;
-  calorieTarget?: number;
+export type NutritionPhaseType = 'bulk' | 'cut' | 'maintain';
+
+/** Body-composition phase (lean bulk / lean cut / maintenance), separate from training blocks. */
+export interface NutritionPhase {
+  id: string;
+  type: NutritionPhaseType;
+  startDate: string;
+  endDate?: string;
+  status: 'active' | 'completed';
+  /** Planned bodyweight change in kg/week (negative for a cut). */
+  targetRate: number;
+  startWeight?: number;
+  startWaistCm?: number;
+  reason?: string;
+}
+
+export interface Profile {
+  heightCm?: number;
+  /** Self-estimate used to calibrate the waist-based body fat estimate. */
+  baseline?: { date: string; weight: number; bodyFat: number; waistCm: number };
+  /** Heaviest previous build — used for muscle-memory (faster regain) planning. */
+  peak?: { weight: number; bodyFat: number };
+  goalWeight: number;
+  goalBodyFat: number;
+  /** End a lean bulk around this body fat. */
+  bulkCeiling: number;
+}
+
+export interface Measurement {
+  date: string;
+  waistCm: number;
+}
+
+export type ClothesFit = 'looser' | 'same' | 'tighter';
+
+export interface WeeklyTarget {
+  weekStart: string; // Monday the targets apply from
+  kcal: number;
+  protein: number;
+  maintenance: number;
+  method: 'adaptive' | 'estimate' | 'trend';
+  note: string;
+}
+
+export interface WeeklyCheckIn {
+  date: string;
+  waistCm?: number;
+  clothes?: ClothesFit;
+  photoIds: string[];
+  decision?: string;
+}
+
+export interface Photo {
+  id: string;
+  date: string;
+  pose: 'front' | 'side' | 'back';
 }
 
 export interface CoachReport {
@@ -120,6 +187,16 @@ export interface Settings {
   deloadSetFactor: number; // e.g. 0.5
   weightRounding: number; // kg increment for deload rounding
   workoutsPerWeek: number;
+  /** Template id (or null = rest) for each weekday, index 0 = Sunday. */
+  schedule: (string | null)[];
+  /** One-off changes for specific dates: template id, or null for rest. */
+  scheduleOverrides: Record<string, string | null>;
+  lengthUnits: LengthUnits;
+  /** Return-to-training ramp: faster rep progression until this date. */
+  rampUntil?: string;
+  gistToken?: string;
+  gistId?: string;
+  lastBackupAt?: number;
   weighInTime: string; // HH:MM
   caloriesTime: string;
   coachDay: number; // 0 = Sunday

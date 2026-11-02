@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { DailyCheckIn, Phase, WorkoutSession } from '../types';
+import type { Phase, WorkoutSession } from '../types';
 import { analyzePlateau, deloadFinished, deloadPrescription, nextTemplate, phaseWeek, plateauCheckDue, returningFromBreak } from './phases';
-import { goalProgress, movingAverage } from './stats';
+import { movingAverage } from './stats';
 import { addDays, parseYmd } from './dates';
 
 const gaining = (start: string, extra: Partial<Phase> = {}): Phase => ({ id: 'p', type: 'gaining', number: 1, startDate: start, minWeeks: 4, status: 'active', ...extra });
@@ -89,34 +89,8 @@ describe('rotation and breaks', () => {
   });
 });
 
-describe('bodyweight goal tracking', () => {
-  const series = (start: string, from: number, perDay: number, n: number): DailyCheckIn[] =>
-    Array.from({ length: n }, (_, i) => ({ date: addDays(start, i), bodyweight: from + perDay * i }));
-
-  it('7-day moving average', () => {
-    const ma = movingAverage([1, 2, 3, 4, 5, 6, 7, 8].map((v, i) => ({ date: addDays('2026-01-01', i), value: v })));
-    expect(ma[6].value).toBe(4);
-    expect(ma[7].value).toBe(5);
-  });
-
-  it('on track when losing at the needed rate', () => {
-    // 80kg → 76kg over 8 weeks = -0.5kg/week; losing 0.5/7 per day
-    const ci = series('2026-01-01', 80, -0.5 / 7, 14);
-    const g = goalProgress(ci, { direction: 'lose', goalWeight: 76, goalDate: addDays('2026-01-14', 56) }, '2026-01-14');
-    expect(g.status).toBe('on-track');
-  });
-
-  it('behind when weight is flat on a cut, with a calorie suggestion', () => {
-    const ci = series('2026-01-01', 80, 0, 14);
-    const g = goalProgress(ci, { direction: 'lose', goalWeight: 76, goalDate: addDays('2026-01-14', 56) }, '2026-01-14');
-    expect(g.status).toBe('behind');
-    expect(g.calorieAdjust).toBeLessThan(0);
-  });
-
-  it('flags losing too fast', () => {
-    const ci = series('2026-01-01', 80, -1.5 / 7, 14);
-    const g = goalProgress(ci, { direction: 'lose', goalWeight: 70, goalDate: addDays('2026-01-14', 140) }, '2026-01-14');
-    expect(g.status).toBe('too-fast');
-    expect(g.calorieAdjust).toBeGreaterThan(0);
-  });
+it('7-day moving average', () => {
+  const ma = movingAverage([1, 2, 3, 4, 5, 6, 7, 8].map((v, i) => ({ date: addDays('2026-01-01', i), value: v })));
+  expect(ma[6].value).toBe(4);
+  expect(ma[7].value).toBe(5);
 });

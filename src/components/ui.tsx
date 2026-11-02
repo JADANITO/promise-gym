@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useStore } from '../data/store';
-import { fromUnit, toUnit } from '../format';
+import { MUSCLES } from '../data/library';
+import type { Muscle } from '../types';
+import { fromLen, fromUnit, toLen, toUnit } from '../format';
 
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: ReactNode }) {
   if (!open) return null;
@@ -14,15 +16,17 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
   );
 }
 
-/** Weight input that shows and accepts the user's units but reports kg. */
-export function WeightInput({ kg, onChange, autoFocus, id }: { kg: number | undefined; onChange: (kg: number | undefined) => void; autoFocus?: boolean; id?: string }) {
-  const units = useStore(s => s.settings.units);
-  const [text, setText] = useState(kg == null ? '' : String(toUnit(kg, units)));
+/** Numeric input shown in display units but reporting a base unit (kg or cm). */
+function UnitInput({ value, onChange, to, from, suffix, autoFocus, id, placeholder = '0' }: {
+  value: number | undefined; onChange: (v: number | undefined) => void; to: (v: number) => number; from: (v: number) => number;
+  suffix: string; autoFocus?: boolean; id?: string; placeholder?: string;
+}) {
+  const [text, setText] = useState(value == null ? '' : String(to(value)));
   useEffect(() => {
-    const current = text === '' ? undefined : fromUnit(parseFloat(text), units);
-    if (kg == null ? text !== '' : current == null || Math.abs(current - kg) > 0.01) setText(kg == null ? '' : String(toUnit(kg, units)));
+    const current = text === '' ? undefined : from(parseFloat(text));
+    if (value == null ? text !== '' : current == null || Math.abs(current - value) > 0.01) setText(value == null ? '' : String(to(value)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kg, units]);
+  }, [value, suffix]);
   return (
     <div className="row">
       <input
@@ -31,15 +35,39 @@ export function WeightInput({ kg, onChange, autoFocus, id }: { kg: number | unde
         inputMode="decimal"
         autoFocus={autoFocus}
         value={text}
-        placeholder="0"
+        placeholder={placeholder}
         onChange={e => {
           const v = e.target.value.replace(',', '.');
           setText(v);
           const n = parseFloat(v);
-          onChange(isNaN(n) ? undefined : fromUnit(n, units));
+          onChange(isNaN(n) ? undefined : from(n));
         }}
       />
-      <span className="muted bold">{units}</span>
+      <span className="muted bold">{suffix}</span>
+    </div>
+  );
+}
+
+/** Weight input that shows and accepts the user's units but reports kg. */
+export function WeightInput({ kg, onChange, autoFocus, id, placeholder }: { kg: number | undefined; onChange: (kg: number | undefined) => void; autoFocus?: boolean; id?: string; placeholder?: string }) {
+  const units = useStore(s => s.settings.units);
+  return <UnitInput value={kg} onChange={onChange} to={v => toUnit(v, units)} from={v => fromUnit(v, units)} suffix={units} autoFocus={autoFocus} id={id} placeholder={placeholder} />;
+}
+
+/** Length input (waist etc.) in inches or cm, reporting cm. */
+export function LengthInput({ cm, onChange, autoFocus, id, placeholder }: { cm: number | undefined; onChange: (cm: number | undefined) => void; autoFocus?: boolean; id?: string; placeholder?: string }) {
+  const units = useStore(s => s.settings.lengthUnits);
+  return <UnitInput value={cm} onChange={onChange} to={v => toLen(v, units)} from={v => fromLen(v, units)} suffix={units === 'in' ? 'in' : 'cm'} autoFocus={autoFocus} id={id} placeholder={placeholder} />;
+}
+
+/** 1–5 rating chips. */
+export function Rating({ value, onChange, low, high }: { value: number | undefined; onChange: (v: number) => void; low: string; high: string }) {
+  return (
+    <div>
+      <div className="chips">
+        {[1, 2, 3, 4, 5].map(v => <button key={v} className={`chip ${value === v ? 'on' : ''}`} style={{ minWidth: 48 }} onClick={() => onChange(v)}>{v}</button>)}
+      </div>
+      <div className="row between tiny muted mt"><span>{low}</span><span>{high}</span></div>
     </div>
   );
 }
@@ -67,15 +95,29 @@ export function ExercisePicker({ open, onClose, onPick }: { open: boolean; onClo
   const custom = useStore(s => s.customExercises);
   const addCustom = useStore(s => s.addCustomExercise);
   const [q, setQ] = useState('');
+  const [muscles, setMuscles] = useState<Muscle[] | null>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const all = useMemo(() => exercises(), [custom]);
   const filtered = all.filter(e => e.name.toLowerCase().includes(q.trim().toLowerCase()));
   const exact = all.some(e => e.name.toLowerCase() === q.trim().toLowerCase());
+  if (muscles) {
+    return (
+      <Sheet open={open} onClose={() => { setMuscles(null); onClose(); }} title={`“${q.trim()}” works…`}>
+        <p className="muted small">Pick the main muscles so your weekly volume counts it.</p>
+        <div className="chips mt">
+          {MUSCLES.map(m => (
+            <button key={m.id} className={`chip ${muscles.includes(m.id) ? 'on' : ''}`} onClick={() => setMuscles(muscles.includes(m.id) ? muscles.filter(x => x !== m.id) : [...muscles, m.id])}>{m.label}</button>
+          ))}
+        </div>
+        <button className="btn primary block mt2" onClick={() => { onPick(addCustom(q, muscles).id); setQ(''); setMuscles(null); }}>Add exercise</button>
+      </Sheet>
+    );
+  }
   return (
     <Sheet open={open} onClose={onClose} title="Choose exercise">
       <input className="input" placeholder="Search or type a new exercise" value={q} onChange={e => setQ(e.target.value)} autoFocus />
       {q.trim() && !exact && (
-        <button className="btn primary block mt" onClick={() => { onPick(addCustom(q).id); setQ(''); }}>
+        <button className="btn primary block mt" onClick={() => setMuscles([])}>
           + Add “{q.trim()}”
         </button>
       )}

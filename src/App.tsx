@@ -7,8 +7,13 @@ import { ActiveWorkout } from './screens/ActiveWorkout';
 import { SessionDetail, StartWorkout, Summary } from './screens/Session';
 import { AnalysisScreen } from './screens/Analysis';
 import { CoachScreen, generateReport } from './screens/Coach';
-import { Onboarding, SettingsScreen } from './screens/Settings';
+import { SettingsScreen } from './screens/Settings';
+import { Setup } from './screens/Setup';
+import { WeeklyCheckInScreen } from './screens/WeeklyCheckIn';
+import { PhotosScreen } from './screens/Photos';
 import { addDays, minutesOf, ymd } from './engine/dates';
+import { ensureWeeklyTargets, weeklyCheckInDue } from './data/plan';
+import { backupToGist } from './data/backup';
 import { notify } from './alerts';
 
 function useHashRoute(): [string, (r: string) => void] {
@@ -33,6 +38,7 @@ function useBackgroundChecks() {
     const check = async () => {
       const s = useStore.getState();
       s.tickPhases();
+      ensureWeeklyTargets(useStore.getState());
       const now = new Date();
       const today = ymd(now);
       const min = now.getHours() * 60 + now.getMinutes();
@@ -42,9 +48,21 @@ function useBackgroundChecks() {
         s.markNotified('weight', today);
         void notify('Good morning — log your weight', 'One tap to keep your goal on track.', 'weigh-in');
       }
-      if (min >= minutesOf(s.settings.caloriesTime) && ci?.calories == null && s.notified.calories !== today) {
+      if (min >= minutesOf(s.settings.caloriesTime) && ci?.protein == null && ci?.calories == null && s.notified.calories !== today) {
         s.markNotified('calories', today);
-        void notify('How many calories today?', 'Log it before bed — it takes five seconds.', 'calories');
+        void notify("Log today's protein & calories", 'Five seconds — it keeps your targets accurate.', 'calories');
+      }
+      if (weeklyCheckInDue(s, today) && min >= 9 * 60 && s.notified.checkin !== today) {
+        s.markNotified('checkin', today);
+        void notify('Sunday check-in', "Waist, photos and next week's targets — 2 minutes.", 'checkin');
+      }
+      // Weekly safety-net backup if the user set up GitHub and hasn't backed up in 7 days.
+      if (s.settings.gistToken && navigator.onLine && (!s.settings.lastBackupAt || Date.now() - s.settings.lastBackupAt > 7 * 86_400_000) && s.notified.backup !== today) {
+        s.markNotified('backup', today);
+        try {
+          const id = await backupToGist(s.settings.gistToken, s.exportData(), s.settings.gistId);
+          useStore.getState().setSettings({ gistId: id, lastBackupAt: Date.now() });
+        } catch { /* retry tomorrow */ }
       }
       const weekOf = addDays(today, -6);
       const due = now.getDay() === s.settings.coachDay && min >= minutesOf(s.settings.coachTime);
@@ -67,9 +85,9 @@ function useBackgroundChecks() {
 const TABS: { id: string; label: string; icon: Parameters<typeof Icon>[0]['name']; match: (r: string) => boolean }[] = [
   { id: 'home', label: 'Home', icon: 'home', match: r => r === 'home' },
   { id: 'workouts', label: 'Workouts', icon: 'dumbbell', match: r => /^(workouts|edit|session|start|summary)/.test(r) },
-  { id: 'progress', label: 'Progress', icon: 'chart', match: r => r === 'progress' },
-  { id: 'coach', label: 'Coach', icon: 'coach', match: r => r === 'coach' },
-  { id: 'settings', label: 'Settings', icon: 'settings', match: r => r === 'settings' },
+  { id: 'progress', label: 'Progress', icon: 'chart', match: r => r === 'progress' || r === 'photos' },
+  { id: 'coach', label: 'Coach', icon: 'coach', match: r => r === 'coach' || r === 'checkin' },
+  { id: 'settings', label: 'Settings', icon: 'settings', match: r => r === 'settings' || r === 'setup' },
 ];
 
 export default function App() {
@@ -78,7 +96,7 @@ export default function App() {
   const active = useStore(s => !!s.active);
   useBackgroundChecks();
 
-  if (!onboarded) return <div className="app"><Onboarding /></div>;
+  if (!onboarded) return <div className="app"><Setup first go={go} /></div>;
 
   const [head, arg] = [route.split('/')[0], route.split('/').slice(1).join('/')];
   const inWorkout = head === 'workout' && active;
@@ -91,9 +109,12 @@ export default function App() {
     case 'workout': screen = active ? <ActiveWorkout go={go} /> : <Home go={go} />; break;
     case 'summary': screen = <Summary id={arg} go={go} />; break;
     case 'session': screen = <SessionDetail key={arg} id={arg} go={go} />; break;
-    case 'progress': screen = <AnalysisScreen />; break;
-    case 'coach': screen = <CoachScreen />; break;
+    case 'progress': screen = <AnalysisScreen go={go} />; break;
+    case 'coach': screen = <CoachScreen go={go} />; break;
     case 'settings': screen = <SettingsScreen go={go} />; break;
+    case 'setup': screen = <Setup go={go} />; break;
+    case 'checkin': screen = <WeeklyCheckInScreen go={go} />; break;
+    case 'photos': screen = <PhotosScreen go={go} />; break;
     default: screen = <Home go={go} />;
   }
 
