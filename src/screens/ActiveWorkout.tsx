@@ -103,6 +103,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const title = name(ex.exerciseId);
   const working = ex.sets.filter(s => !s.warmup);
   const needsNewWeight = ex.increasePrompted && !ex.increaseHandled;
+  const pickWeight = needsNewWeight && ex.firstWeight;
 
   const mutateEx = (fn: (e: ActiveExercise) => void) => update(a => {
     const e = a.session.exercises.find(x => x.id === ex.id);
@@ -129,7 +130,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
         </div>
         {ex.machineNote && <p className="muted small">{ex.machineNote}</p>}
         <div className="ex-meta">
-          <span className="pill accent num">{fmtW(ex.workingWeight, units)}</span>
+          <span className="pill accent num">{pickWeight ? 'Pick a weight' : fmtW(ex.workingWeight, units)}</span>
           <span className="pill num">Target: {ex.targetReps} reps · Range {ex.repMin}–{ex.repMax}</span>
           <span className="pill num">Rest {fmtClock(ex.restSec)}</span>
           {!ex.countsForProgression && <span className="pill warn">One-off weight</span>}
@@ -173,7 +174,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
                   {s.rpe != null && <div className="tiny muted">@{s.rpe}</div>}
                 </button>
                 <button className="set-w num" onClick={() => setSheet({ setId: s.id })}>
-                  <b>{fmtW(s.weight, units)}</b><br />target {s.targetReps}
+                  <b>{pickWeight && !s.warmup ? '—' : fmtW(s.weight, units)}</b><br />target {s.targetReps}
                 </button>
                 <div className="stepper">
                   <button aria-label="One less rep" onClick={() => mutateEx(e => { const x = e.sets.find(y => y.id === s.id)!; x.reps = Math.max(0, x.reps - 1); })}>−</button>

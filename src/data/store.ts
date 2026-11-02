@@ -284,9 +284,11 @@ export const useStore = create<Store>()(
           e.workingWeight = kg;
           e.targetReps = target;
           e.countsForProgression = true;
-          e.reason = kg > e.baseWeight
-            ? `New weight ${fmtW(kg, d.settings.units)} — back to the bottom of the range: ${target} reps.`
-            : `Same weight — aim for ${target} reps again.`;
+          e.reason = e.firstWeight
+            ? `Starting at ${fmtW(kg, d.settings.units)} — aim for ${target} reps on every set, with 2–3 left in the tank.`
+            : kg > e.baseWeight
+              ? `New weight ${fmtW(kg, d.settings.units)} — back to the bottom of the range: ${target} reps.`
+              : `Same weight — aim for ${target} reps again.`;
           for (const s of e.sets) {
             if (s.warmup) { if (!s.completed) s.weight = roundTo(kg * 0.5, d.settings.weightRounding); continue; }
             s.weight = kg;

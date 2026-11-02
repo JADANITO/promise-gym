@@ -433,7 +433,7 @@ function Muscles() {
             <div key={m}>
               <div className="row between small"><span>{muscleLabel(m)}</span><span className="num bold">{v} <span className={`pill ${state === 'ok' ? 'good' : 'warn'}`} style={{ padding: '0 6px' }}>{state === 'ok' ? 'in range' : state}</span></span></div>
               <div style={{ position: 'relative', height: 10, background: 'var(--surface-2)', borderRadius: 5, marginTop: 4, overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', left: `${(lo / max) * 100}%`, width: `${((hi - lo) / max) * 100}%`, top: 0, bottom: 0, background: 'rgba(255,255,255,0.08)' }} />
+                <div style={{ position: 'absolute', left: `${(lo / max) * 100}%`, width: `${((hi - lo) / max) * 100}%`, top: 0, bottom: 0, background: 'rgba(255,255,255,0.16)' }} />
                 <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, (v / max) * 100)}%`, background: C1, borderRadius: 5 }} />
               </div>
             </div>

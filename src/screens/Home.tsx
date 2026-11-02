@@ -185,7 +185,13 @@ function WeekStrip({ week }: { week: PlanDay[] }) {
             <p className="small muted">Planned: <b>{name(open.planned)}</b>{open.date in s.settings.scheduleOverrides ? ' (moved this week)' : ''}</p>
             <div className="chips">
               {s.templates.filter(t => !t.archived).map(t => (
-                <button key={t.id} className={`chip ${open.planned === t.id ? 'on' : ''}`} onClick={() => { s.setOverride(open.date, t.id); setOpen(null); }}>{t.name}</button>
+                <button key={t.id} className={`chip ${open.planned === t.id ? 'on' : ''}`} onClick={() => {
+                  // Moving a session swaps days: wherever it was still to come this week gets this day's old plan.
+                  const from = week.find(d => d.date !== open.date && d.planned === t.id && d.status !== 'done');
+                  s.setOverride(open.date, t.id);
+                  if (from) s.setOverride(from.date, open.planned);
+                  setOpen(null);
+                }}>{t.name}</button>
               ))}
               <button className={`chip ${open.planned == null ? 'on' : ''}`} onClick={() => { s.setOverride(open.date, null); setOpen(null); }}>Rest</button>
             </div>

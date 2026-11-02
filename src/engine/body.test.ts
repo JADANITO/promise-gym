@@ -150,3 +150,14 @@ describe('phase status and recommendations', () => {
     expect(recommendPhase({ phase: cut, comp, profile, clothes: [], today: TODAY }).action).toBe('maintain');
   });
 });
+
+describe('pace judgement', () => {
+  it('calls +0.23kg/wk slow against a +0.35kg/wk lean bulk and suggests eating more', () => {
+    const s = phaseStatus({ type: 'bulk', targetRate: 0.35 }, series(14, 74, 0.23 / 7), TODAY);
+    expect(s.status).toBe('slow');
+    expect(s.advice).toContain('more');
+  });
+  it('accepts +0.3kg/wk as on track', () => {
+    expect(phaseStatus({ type: 'bulk', targetRate: 0.35 }, series(14, 74, 0.3 / 7), TODAY).status).toBe('on-track');
+  });
+});

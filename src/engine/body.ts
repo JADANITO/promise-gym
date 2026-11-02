@@ -262,7 +262,8 @@ export function phaseStatus(phase: Pick<NutritionPhase, 'type' | 'targetRate'>, 
   const actual = weeklyRate(checkIns, today);
   const target = phase.targetRate;
   if (actual == null) return { actual, target, status: 'unknown', advice: 'A few more morning weigh-ins and I can see your trend.' };
-  const tol = Math.max(0.1, Math.abs(target) * 0.4);
+  // A PT would act on being ~25% off pace; the 14-day trend is steady enough to judge that.
+  const tol = Math.max(0.07, Math.abs(target) * 0.25);
   const diff = actual - target;
   const kcal = Math.round(Math.abs(diff * KCAL_PER_KG) / 7 / 25) * 25;
   const fmt = (n: number) => `${n >= 0 ? '+' : ''}${r2(n)}kg/wk`;
