@@ -1,0 +1,39 @@
+import Anthropic from '@anthropic-ai/sdk';
+import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { z } from 'zod';
+import type { WeekStats } from './coach';
+
+const ReportSchema = z.object({
+  summary: z.string(),
+  wins: z.array(z.string()),
+  changes: z.array(z.string()),
+  focus: z.string(),
+});
+
+const SYSTEM = `You are a personal trainer reviewing your client's last 7 days of training data.
+They follow double progression: each exercise has a rep range; they add a rep each session until every working set hits the top, then increase the weight and restart at the bottom. Training runs in gaining phases of at least 4 weeks with deload weeks when they plateau.
+
+Write like a real PT talking to them: direct, specific, encouraging but honest. Use their actual numbers. No generic filler.
+- summary: one line describing the week (e.g. "Solid week: 9 of 12 exercises progressed, weight down 0.4kg.")
+- wins: 1–4 short, specific wins.
+- changes: 2–4 concrete actions for the week ahead, each naming the exercise, weight, reps or kcal involved where relevant (e.g. "Lateral raises have stalled for 3 sessions, so drop to 8kg and rebuild to 15 reps").
+- focus: one sentence of motivation for the week.
+Weights are in kg. Stay within training, nutrition and recovery; don't give medical advice.`;
+
+/** Ask Claude for the weekly report. Throws on any failure so the caller can fall back to the rules coach. */
+export async function aiReport(stats: WeekStats, apiKey: string) {
+  // Personal, single-user app: the key is the user's own, stored only on their device.
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const response = await client.beta.messages.parse({
+    model: 'claude-opus-5-5',
+    max_tokens: 16000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'low', format: betaZodOutputFormat(ReportSchema) },
+    system: SYSTEM,
+    messages: [{ role: 'user', content: `Here is my week as JSON:\n${JSON.stringify(stats, null, 2)}` }],
+  });
+  if (response.stop_reason === 'refusal') throw new Error('The coach declined to answer.');
+  if (!response.parsed_output) throw new Error('The coach returned an unexpected format.');
+  return response.parsed_output;
+}
