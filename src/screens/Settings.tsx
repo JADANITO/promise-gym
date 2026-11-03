@@ -38,9 +38,9 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
     }
     const csv = (r: string[][]) => r.map(l => l.map(c => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n');
     download(`promise-workouts-${ymd()}.csv`, csv(rows), 'text/csv');
-    const daily = [['date', 'bodyweight_kg', 'calories', 'protein_g', 'sleep', 'energy', 'waist_cm', 'notes'], ...Object.values(s.checkIns).sort((a, b) => a.date.localeCompare(b.date)).map(c => [
+    const daily = [['date', 'bodyweight_kg', 'calories', 'protein_g', 'sleep_hours', 'waist_cm', 'notes'], ...Object.values(s.checkIns).sort((a, b) => a.date.localeCompare(b.date)).map(c => [
       c.date, c.bodyweight != null ? String(c.bodyweight) : '', c.calories != null ? String(c.calories) : '', c.protein != null ? String(c.protein) : '',
-      c.sleep != null ? String(c.sleep) : '', c.energy != null ? String(c.energy) : '', String(s.measurements.find(m => m.date === c.date)?.waistCm ?? ''), c.notes ?? '',
+      c.sleepHours != null ? String(c.sleepHours) : '', String(s.measurements.find(m => m.date === c.date)?.waistCm ?? ''), c.notes ?? '',
     ])];
     download(`promise-daily-${ymd()}.csv`, csv(daily), 'text/csv');
   };
@@ -179,7 +179,7 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
         )}
         <p className="tiny muted">Web apps can only notify reliably while open. For guaranteed daily reminders, add them to your phone's calendar:</p>
         <div className="row wrap">
-          <button className="btn sm grow" onClick={() => download('promise-weigh-in.ics', reminderIcs('Weigh in', st.weighInTime, 'Open Promise: weigh in, rate sleep and energy.'), 'text/calendar')}>📅 Weigh-in</button>
+          <button className="btn sm grow" onClick={() => download('promise-weigh-in.ics', reminderIcs('Weigh in', st.weighInTime, 'Open Promise: weigh in and log hours slept.'), 'text/calendar')}>📅 Weigh-in</button>
           <button className="btn sm grow" onClick={() => download('promise-food.ics', reminderIcs('Log protein & calories', st.caloriesTime, "Open Promise and log today's protein and calories."), 'text/calendar')}>📅 Food log</button>
         </div>
       </div>

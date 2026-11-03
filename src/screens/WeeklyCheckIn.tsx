@@ -42,6 +42,7 @@ export function WeeklyCheckInScreen({ go }: { go: (r: string) => void }) {
   const thisWeek = mean(ci.filter(c => c.bodyweight != null && c.date > addDays(today, -7)).map(c => c.bodyweight!));
   const lastWeek = mean(ci.filter(c => c.bodyweight != null && c.date > addDays(today, -14) && c.date <= addDays(today, -7)).map(c => c.bodyweight!));
   const promises = promisesFor({ settings: s.settings, sessions: s.sessions, checkIns: s.checkIns, weekly: s.weeklyCheckIns, target: targetFor(s.weeklyTargets, today), today, weekOf: today });
+  const sleepNights = ci.filter(c => c.sleepHours != null && c.date > addDays(today, -7)).map(c => c.sleepHours!);
   const bfNow = waistCm ? bodyFatFromWaist(s.profile, waistCm) : comp?.bodyFat ?? null;
 
   const rec = useMemo(() => {
@@ -113,6 +114,9 @@ export function WeeklyCheckInScreen({ go }: { go: (r: string) => void }) {
         <div className="stat"><div className="v">{promises.kept}/{promises.total}</div><div className="l">Promises kept</div></div>
       </div>
       {status && <div className={`card tight ${status.status === 'on-track' ? 'accent' : status.status === 'unknown' ? '' : 'warn'}`}><span className="small">{status.advice}</span></div>}
+      {sleepNights.length > 0 && (
+        <p className="small muted">Sleep: <b style={{ color: mean(sleepNights)! < 7 ? 'var(--warn)' : 'var(--text)' }}>{mean(sleepNights)!.toFixed(1)}h</b> average over {sleepNights.length} night{sleepNights.length > 1 ? 's' : ''}{sleepNights.filter(h => h < 6).length ? ` · ${sleepNights.filter(h => h < 6).length} under 6h` : ''}</p>
+      )}
 
       <h2 className="section-title">Measure</h2>
       <div className="card stack">

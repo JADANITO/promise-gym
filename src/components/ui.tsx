@@ -60,25 +60,13 @@ export function LengthInput({ cm, onChange, autoFocus, id, placeholder }: { cm: 
   return <UnitInput value={cm} onChange={onChange} to={v => toLen(v, units)} from={v => fromLen(v, units)} suffix={units === 'in' ? 'in' : 'cm'} autoFocus={autoFocus} id={id} placeholder={placeholder} />;
 }
 
-/** 1–5 rating chips. */
-export function Rating({ value, onChange, low, high }: { value: number | undefined; onChange: (v: number) => void; low: string; high: string }) {
-  return (
-    <div>
-      <div className="chips">
-        {[1, 2, 3, 4, 5].map(v => <button key={v} className={`chip ${value === v ? 'on' : ''}`} style={{ minWidth: 48 }} onClick={() => onChange(v)}>{v}</button>)}
-      </div>
-      <div className="row between tiny muted mt"><span>{low}</span><span>{high}</span></div>
-    </div>
-  );
-}
-
 /**
  * Number input that can be cleared while typing. Callers often fall back to a default for
  * `undefined`, so an empty box is kept local and only real numbers are reported; leaving it
  * empty restores the last value.
  */
-export function NumberField({ value, onChange, suffix, step = 1, min = 0, id, optional = false }: {
-  value: number | undefined; onChange: (n: number | undefined) => void; suffix?: string; step?: number; min?: number; id?: string;
+export function NumberField({ value, onChange, suffix, step = 1, min = 0, id, optional = false, placeholder }: {
+  value: number | undefined; onChange: (n: number | undefined) => void; suffix?: string; step?: number; min?: number; id?: string; placeholder?: string;
   /** Empty is a real answer (e.g. "no calorie target"), so report undefined. */
   optional?: boolean;
 }) {
@@ -94,6 +82,7 @@ export function NumberField({ value, onChange, suffix, step = 1, min = 0, id, op
         id={id}
         className="input num"
         inputMode={step < 1 ? 'decimal' : 'numeric'}
+        placeholder={placeholder}
         value={text}
         onChange={e => {
           const v = e.target.value.replace(',', '.');

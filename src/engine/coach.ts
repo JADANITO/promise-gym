@@ -36,7 +36,7 @@ export interface WeekStats {
   body: { weight: number | null; bodyFatEstimate: number | null; waistChangeSincePhaseStartCm: number | null; goalWeight: number; goalBodyFat: number };
   calories: { target: number | null; maintenanceEstimate: number | null; average: number | null; daysLogged: number };
   protein: { target: number | null; average: number | null; daysLogged: number; daysHit: number };
-  recovery: { avgSleep: number | null; avgEnergy: number | null; lowSleepNights: number };
+  recovery: { avgSleepHours: number | null; nightsLogged: number; nightsUnder6h: number };
   volume: { muscle: string; sets: number; range: [number, number] }[];
   promisesKept: { kept: number; total: number };
   notes: string[];
@@ -85,8 +85,7 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
   const lastWaist = [...input.measurements].sort((a, b) => b.date.localeCompare(a.date))[0];
   const kc = days.map(d => checkIns[d]?.calories).filter((v): v is number => v != null);
   const pr = days.map(d => checkIns[d]?.protein).filter((v): v is number => v != null);
-  const sleep = days.map(d => checkIns[d]?.sleep).filter((v): v is number => v != null);
-  const energy = days.map(d => checkIns[d]?.energy).filter((v): v is number => v != null);
+  const sleep = days.map(d => checkIns[d]?.sleepHours).filter((v): v is number => v != null);
   const vol = setsPerMuscle(sessions, input.exercises, from, today);
   const promises = promisesFor({ settings, sessions, checkIns, weekly: input.weeklyCheckIns, target: target ?? undefined, today, weekOf: weekStart(today) });
   const r1 = (n: number | null | undefined) => (n == null ? null : Math.round(n * 10) / 10);
@@ -121,7 +120,7 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
     },
     calories: { target: target?.kcal ?? null, maintenanceEstimate: target?.maintenance ?? null, average: kc.length ? Math.round(mean(kc)!) : null, daysLogged: kc.length },
     protein: { target: target?.protein ?? null, average: pr.length ? Math.round(mean(pr)!) : null, daysLogged: pr.length, daysHit: target ? pr.filter(p => p >= target.protein * 0.9).length : 0 },
-    recovery: { avgSleep: r1(mean(sleep)), avgEnergy: r1(mean(energy)), lowSleepNights: sleep.filter(x => x <= 2).length },
+    recovery: { avgSleepHours: r1(mean(sleep)), nightsLogged: sleep.length, nightsUnder6h: sleep.filter(x => x < 6).length },
     volume: TRACKED_MUSCLES.map(m => ({ muscle: muscleLabel(m), sets: Math.round((vol[m] ?? 0) * 10) / 10, range: volumeRange(m) })),
     promisesKept: { kept: promises.kept, total: promises.total },
     notes,
@@ -150,6 +149,8 @@ export function rulesReport(s: WeekStats): Advice {
   if (cutting && heldInCut.length) wins.push(`Held strength on ${heldInCut.length} lifts while dieting — that's muscle kept.`);
   if (s.workoutsDone >= s.workoutsPlanned) wins.push(`Hit all ${s.workoutsPlanned} planned sessions. Promise kept.`);
   if (s.nutritionPhase?.status === 'on-track') wins.push('Bodyweight is moving exactly as planned.');
+  const { avgSleepHours: hrs, nightsLogged, nightsUnder6h } = s.recovery;
+  if (hrs != null && nightsLogged >= 5 && hrs >= 7.5) wins.push(`Averaged ${hrs}h of sleep — that's where the muscle gets built.`);
   if (s.protein.target && s.protein.daysHit >= 6) wins.push(`Protein target hit ${s.protein.daysHit} of 7 days.`);
   if (!wins.length) wins.push(s.workoutsDone ? 'You showed up. Build on it this week.' : 'Nothing logged yet — this week is a clean slate.');
 
@@ -169,8 +170,9 @@ export function rulesReport(s: WeekStats): Advice {
   if (low.length) changes.push(`Low volume this week: ${low.slice(0, 3).map(v => `${v.muscle} ${v.sets} sets (aim ${v.range[0]}+)`).join(', ')}. Add a set or two to those exercises.`);
   const high = s.volume.filter(v => v.sets > v.range[1]);
   if (high.length) changes.push(`Very high volume: ${high.map(v => `${v.muscle} ${v.sets} sets`).join(', ')}. More isn't better past ~20 — trim a set and push intensity.`);
-  if (s.recovery.avgSleep != null && (s.recovery.avgSleep < 3 || s.recovery.lowSleepNights >= 3)) {
-    changes.push(`Sleep averaged ${s.recovery.avgSleep}/5 with ${s.recovery.lowSleepNights} poor nights. Muscle is built while you sleep — aim for 7–9 hours before chasing more weight.`);
+  if (hrs != null && nightsLogged >= 3 && (hrs < 7 || nightsUnder6h >= 2)) {
+    const short = nightsUnder6h ? ` with ${nightsUnder6h} night${nightsUnder6h > 1 ? 's' : ''} under 6h` : '';
+    changes.push(`Sleep averaged ${hrs}h${short}. Muscle is built while you sleep — get to 7–9 hours before chasing more weight. Set a fixed bedtime 8 hours before your alarm.`);
   }
   if (s.calories.daysLogged < 4 && s.calories.target) changes.push(`Calories logged on ${s.calories.daysLogged} of 7 days. Even rough logs let me fine-tune your target — I'm steering by the scale until then.`);
   if (s.rampUp) changes.push('You are still in the ramp-up weeks: beat your targets and the app jumps 2 reps at a time. Leave 1–2 reps in the tank.');

@@ -5,7 +5,7 @@ import { PHASE_LABEL, planSnapshot, weeklyCheckInDue } from '../data/plan';
 import { addDays, daysBetween, fmtDate, minutesOf, parseYmd, ymd } from '../engine/dates';
 import { DELOAD_DAYS, analyzePlateau, nextTemplate, phaseWeek, plateauCheckDue } from '../engine/phases';
 import { DAY_NAMES, plannedFor, promisesFor, weekPlan, type PlanDay } from '../engine/schedule';
-import { Rating, Sheet, WeightInput } from '../components/ui';
+import { NumberField, Sheet, WeightInput } from '../components/ui';
 import { PHASE_COLOR } from '../components/plan';
 import { fmtBw, fmtRateW, fmtW } from '../format';
 
@@ -208,23 +208,24 @@ function MorningCheckIn({ date }: { date: string }) {
   const s = useStore();
   const units = s.settings.units;
   const [kg, setKg] = useState<number | undefined>();
-  const [sleep, setSleep] = useState<number | undefined>(s.checkIns[date]?.sleep);
-  const [energy, setEnergy] = useState<number | undefined>(s.checkIns[date]?.energy);
+  const [sleepHours, setSleepHours] = useState<number | undefined>(s.checkIns[date]?.sleepHours);
   const [confirming, setConfirming] = useState(false);
   const last = Object.values(s.checkIns).filter(c => c.bodyweight != null && c.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
 
   const save = () => {
     if (kg == null || kg <= 0) return;
     if (last && Math.abs(kg - last.bodyweight!) > 3 && !confirming) { setConfirming(true); return; }
-    s.setCheckIn(date, { bodyweight: Math.round(kg * 100) / 100, sleep, energy });
+    s.setCheckIn(date, { bodyweight: Math.round(kg * 100) / 100, sleepHours });
   };
   return (
     <div className="card stack">
       <h3 className="bold">Good morning — weigh in</h3>
       <p className="tiny muted">After the toilet, before food or water. Same time every day.</p>
       <WeightInput kg={kg} onChange={k => { setKg(k); setConfirming(false); }} />
-      <div className="field"><label>Sleep last night</label><Rating value={sleep} onChange={setSleep} low="Awful" high="Great" /></div>
-      <div className="field"><label>Energy</label><Rating value={energy} onChange={setEnergy} low="Drained" high="Wired" /></div>
+      <div className="field">
+        <label>Hours slept last night (optional)</label>
+        <NumberField value={sleepHours} onChange={h => setSleepHours(h == null ? undefined : Math.min(16, h))} suffix="hrs" step={0.5} optional placeholder="e.g. 7.5" />
+      </div>
       <button className="btn primary block" disabled={kg == null} onClick={save}>{confirming ? 'Yes, save' : 'Save'}</button>
       {confirming && last && (
         <p className="small" style={{ color: 'var(--warn)' }}>

@@ -101,10 +101,8 @@ export interface DailyCheckIn {
   bodyweight?: number;
   calories?: number;
   protein?: number;
-  /** 1–5 */
-  sleep?: number;
-  /** 1–5 */
-  energy?: number;
+  /** Hours slept the night before. */
+  sleepHours?: number;
   notes?: string;
 }
 
