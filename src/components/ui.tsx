@@ -72,17 +72,40 @@ export function Rating({ value, onChange, low, high }: { value: number | undefin
   );
 }
 
-export function NumberField({ value, onChange, suffix, step = 1, min = 0, id }: { value: number | undefined; onChange: (n: number | undefined) => void; suffix?: string; step?: number; min?: number; id?: string }) {
+/**
+ * Number input that can be cleared while typing. Callers often fall back to a default for
+ * `undefined`, so an empty box is kept local and only real numbers are reported; leaving it
+ * empty restores the last value.
+ */
+export function NumberField({ value, onChange, suffix, step = 1, min = 0, id, optional = false }: {
+  value: number | undefined; onChange: (n: number | undefined) => void; suffix?: string; step?: number; min?: number; id?: string;
+  /** Empty is a real answer (e.g. "no calorie target"), so report undefined. */
+  optional?: boolean;
+}) {
+  const [text, setText] = useState(value == null ? '' : String(value));
+  useEffect(() => {
+    const n = parseFloat(text.replace(',', '.'));
+    if (value == null ? !optional && text !== '' : n !== value) setText(value == null ? '' : String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
   return (
     <div className="row">
       <input
         id={id}
         className="input num"
         inputMode={step < 1 ? 'decimal' : 'numeric'}
-        value={value ?? ''}
+        value={text}
         onChange={e => {
-          const n = parseFloat(e.target.value.replace(',', '.'));
-          onChange(isNaN(n) ? undefined : Math.max(min, n));
+          const v = e.target.value.replace(',', '.');
+          setText(v);
+          const n = parseFloat(v);
+          if (!isNaN(n)) onChange(Math.max(min, n));
+          else if (optional && v.trim() === '') onChange(undefined);
+        }}
+        onBlur={() => {
+          const n = parseFloat(text);
+          if (isNaN(n)) setText(value == null ? '' : String(value));
+          else if (n < min) setText(String(min));
         }}
       />
       {suffix && <span className="muted bold">{suffix}</span>}
