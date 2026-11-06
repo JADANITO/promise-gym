@@ -149,6 +149,8 @@ export interface DailyCheckIn {
   protein?: number;
   /** Hours slept the night before. */
   sleepHours?: number;
+  /** You told the app you didn't weigh in this morning. */
+  weighInMissed?: boolean;
   notes?: string;
 }
 
@@ -169,6 +171,8 @@ export interface NutritionPhase {
 }
 
 export interface Profile {
+  /** Used in greetings and motivation ("Would future Jaden be proud?"). */
+  name?: string;
   heightCm?: number;
   /** Self-estimate used to calibrate the waist-based body fat estimate. */
   baseline?: { date: string; weight: number; bodyFat: number; waistCm: number };

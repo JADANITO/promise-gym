@@ -1,3 +1,4 @@
+import { dayPart } from './data/quotes';
 import { useCallback, useEffect, useState } from 'react';
 import { useStore } from './data/store';
 import { Icon } from './components/ui';
@@ -46,9 +47,10 @@ function useBackgroundChecks() {
       const off = s.eventToday();
       const quiet = !!off && off.type !== 'sore'; // ill or away: no reminders
 
-      if (!quiet && min >= minutesOf(s.settings.weighInTime) && ci?.bodyweight == null && s.notified.weight !== today) {
+      if (!quiet && min >= minutesOf(s.settings.weighInTime) && ci?.bodyweight == null && !ci?.weighInMissed && s.notified.weight !== today) {
         s.markNotified('weight', today);
-        void notify('Good morning — log your weight', 'One tap to keep your goal on track.', 'weigh-in');
+        const who = s.profile.name?.trim() || 'you';
+        void notify(dayPart(now) === 'morning' ? 'Good morning — log your weight' : 'Did you weigh in this morning?', `Future ${who} weighs in every morning. One tap.`, 'weigh-in');
       }
       if (!quiet && min >= minutesOf(s.settings.caloriesTime) && ci?.protein == null && ci?.calories == null && s.notified.calories !== today) {
         s.markNotified('calories', today);

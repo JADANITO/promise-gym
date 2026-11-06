@@ -215,6 +215,11 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
 
       <h2 className="section-title">Motivation</h2>
       <div className="card stack">
+        <div className="field">
+          <label>Your name</label>
+          <input className="input" placeholder="e.g. Jaden" value={s.profile.name ?? ''} onChange={e => s.setProfile({ name: e.target.value })} />
+          <span className="tiny muted">Used in greetings and messages like “Would future {s.profile.name?.trim() || 'you'} be proud?”. Your own messages can use {'{name}'} and {'{goal}'} too.</span>
+        </div>
         <div className="row">
           <input className="input grow" placeholder="Add your own message" value={quote} onChange={e => setQuote(e.target.value)} />
           <button className="btn primary" disabled={!quote.trim()} onClick={() => { set({ customQuotes: [...st.customQuotes, quote.trim()] }); setQuote(''); }}>Add</button>

@@ -175,7 +175,7 @@ const initialData: Data = {
   sessions: [],
   phases: [],
   checkIns: {},
-  profile: { goalWeight: 0, goalBodyFat: 12, bulkCeiling: 16 },
+  profile: { name: 'Jaden', goalWeight: 0, goalBodyFat: 12, bulkCeiling: 16 },
   nutritionPhases: [],
   measurements: [],
   weeklyTargets: [],

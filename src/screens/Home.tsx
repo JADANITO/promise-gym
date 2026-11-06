@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useStore } from '../data/store';
-import { quoteFor } from '../data/quotes';
+import { dayPart, greeting, missedWeighInQuote, quoteFor, type QuoteVars } from '../data/quotes';
 import { PHASE_LABEL, planSnapshot, weeklyCheckInDue } from '../data/plan';
 import { PROGRAM_VERSION } from '../data/program';
 import { addDays, daysBetween, fmtDate, minutesOf, parseYmd, weekStart, ymd } from '../engine/dates';
 import { DELOAD_DAYS, analyzePlateau, nextTemplate, phaseWeek, plateauCheckDue } from '../engine/phases';
-import { DAY_NAMES, plannedFor, promisesFor, weekPlan, type PlanDay } from '../engine/schedule';
+import { DAY_NAMES, eventOn, plannedFor, promisesFor, weekPlan, type PlanDay } from '../engine/schedule';
 import { NumberField, Sheet, WeightInput } from '../components/ui';
 import { PHASE_COLOR } from '../components/plan';
 import { fmtBw, fmtRateW, fmtW } from '../format';
@@ -18,7 +18,9 @@ export function Home({ go }: { go: (r: string) => void }) {
   const today = ymd();
   const block = s.currentPhase();
   const plan = planSnapshot(s, today);
-  const quote = quoteFor(today, s.settings.customQuotes);
+  const u = s.settings.units;
+  const vars: QuoteVars = { name: s.profile.name, goal: s.profile.goalWeight ? `${fmtW(s.profile.goalWeight, u)} at ${s.profile.goalBodyFat}%` : undefined };
+  const quote = quoteFor(today, s.settings.customQuotes, vars);
   const ci = s.checkIns;
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const yesterday = addDays(today, -1);
@@ -31,12 +33,14 @@ export function Home({ go }: { go: (r: string) => void }) {
   const week = weekPlan(s.settings, s.sessions, today, s.lifeEvents);
   const promises = promisesFor({ settings: s.settings, sessions: s.sessions, checkIns: ci, weekly: s.weeklyCheckIns, target: plan.target, today, weekOf: today, events: s.lifeEvents });
   const [plateauOpen, setPlateauOpen] = useState(false);
-  const u = s.settings.units;
 
   return (
     <div className="stack">
       <div className="row between wrap" style={{ gap: 6 }}>
-        <span className="muted small bold">{fmtDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+        <div>
+          <h1 className="bold" style={{ fontSize: 22, margin: 0 }}>{greeting(s.profile.name)}</h1>
+          <span className="muted small bold">{fmtDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+        </div>
         <div className="row" style={{ gap: 6 }}>
           {plan.phase && <span className="pill" style={{ borderColor: PHASE_COLOR[plan.phase.type], color: PHASE_COLOR[plan.phase.type] }}>{PHASE_LABEL[plan.phase.type]} · wk {plan.weeksIn + 1}</span>}
           {block && (
@@ -75,7 +79,7 @@ export function Home({ go }: { go: (r: string) => void }) {
         </div>
       )}
 
-      {ci[today]?.bodyweight == null && !offPlan && <MorningCheckIn date={today} />}
+      {ci[today]?.bodyweight == null && !offPlan && (ci[today]?.weighInMissed ? <MissedWeighIn date={today} vars={vars} /> : <MorningCheckIn date={today} />)}
 
       {plateauCheckDue(block, today) && (
         <div className="card warn stack">
@@ -309,27 +313,49 @@ function MorningCheckIn({ date }: { date: string }) {
   const [sleepHours, setSleepHours] = useState<number | undefined>(s.checkIns[date]?.sleepHours);
   const [confirming, setConfirming] = useState(false);
   const last = Object.values(s.checkIns).filter(c => c.bodyweight != null && c.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+  const morning = dayPart() === 'morning';
 
   const save = () => {
     if (kg == null || kg <= 0) return;
     if (last && Math.abs(kg - last.bodyweight!) > 3 && !confirming) { setConfirming(true); return; }
-    s.setCheckIn(date, { bodyweight: Math.round(kg * 100) / 100, sleepHours });
+    s.setCheckIn(date, { bodyweight: Math.round(kg * 100) / 100, sleepHours, weighInMissed: undefined });
   };
   return (
     <div className="card stack">
-      <h3 className="bold">Good morning — weigh in</h3>
-      <p className="tiny muted">After the toilet, before food or water. Same time every day.</p>
+      <h3 className="bold">{morning ? 'Good morning — weigh in' : 'Did you weigh in this morning?'}</h3>
+      <p className="tiny muted">
+        {morning ? 'After the toilet, before food or water. Same time every day.'
+          : "Enter what the scale said this morning. Don't weigh yourself now instead — after food and water it reads 1–2kg heavy and throws off your trend."}
+      </p>
       <WeightInput kg={kg} onChange={k => { setKg(k); setConfirming(false); }} />
       <div className="field">
         <label>Hours slept last night (optional)</label>
         <NumberField value={sleepHours} onChange={h => setSleepHours(h == null ? undefined : Math.min(16, h))} suffix="hrs" step={0.5} optional placeholder="e.g. 7.5" />
       </div>
-      <button className="btn primary block" disabled={kg == null} onClick={save}>{confirming ? 'Yes, save' : 'Save'}</button>
+      <button className="btn primary block" disabled={kg == null} onClick={save}>{confirming ? 'Yes, save' : morning ? 'Save' : "Save this morning's weight"}</button>
+      <button className="btn sm ghost" onClick={() => s.setCheckIn(date, { weighInMissed: true, sleepHours })}>I missed it today</button>
       {confirming && last && (
         <p className="small" style={{ color: 'var(--warn)' }}>
           That's {fmtW(Math.abs(kg! - last.bodyweight!), units)} different from your last weigh-in ({fmtW(last.bodyweight!, units)}). Typo? Tap “Yes, save” if it's right.
         </p>
       )}
+    </div>
+  );
+}
+
+/** You told the app you missed the weigh-in: no nagging, just a reminder of who you're building. */
+function MissedWeighIn({ date, vars }: { date: string; vars: QuoteVars }) {
+  const s = useStore();
+  const firstWeighIn = Object.values(s.checkIns).filter(c => c.bodyweight != null).map(c => c.date).sort()[0] ?? date;
+  const missedThisWeek = Array.from({ length: 7 }, (_, i) => addDays(date, -i))
+    .filter(d => d >= firstWeighIn && s.checkIns[d]?.bodyweight == null && !eventOn(s.lifeEvents, d)).length;
+  return (
+    <div className="card warn stack">
+      <p className="quote" style={{ fontSize: 20 }}>{missedWeighInQuote(date, vars)}</p>
+      <p className="small muted">
+        No weigh-in today — your trend just uses the other days.{missedThisWeek > 1 ? ` That's ${missedThisWeek} missed in the last 7 days, so tonight put the scale where you'll trip over it.` : ''} Tomorrow: toilet, scale, then breakfast.
+      </p>
+      <button className="btn sm ghost" onClick={() => s.setCheckIn(date, { weighInMissed: undefined })}>Actually, I did weigh in</button>
     </div>
   );
 }
