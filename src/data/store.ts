@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { del, get, set } from 'idb-keyval';
 import type {
-  CableStation, CoachReport, DailyCheckIn, Exercise, ExerciseOverride, LifeEvent, LoggedExercise, LoggedSet, Measurement, Muscle,
+  BodyMeasurement, CableStation, CoachReport, DailyCheckIn, Exercise, ExerciseOverride, LifeEvent, LoggedExercise, LoggedSet, Measurement, Muscle,
   NutritionPhase, NutritionPhaseType, Phase, Photo, Profile, Settings, TemplateExercise, WeeklyCheckIn, WeeklyTarget, WorkoutSession,
   WorkoutTemplate,
 } from '../types';
@@ -11,7 +11,9 @@ import { deloadFinished, deloadPrescription, roundTo } from '../engine/phases';
 import { addDays, daysBetween, parseYmd, weekStart, ymd } from '../engine/dates';
 import { DAY_NAMES, eventOn, plannedFor, plannedPerWeek } from '../engine/schedule';
 import { BUILT_IN_EXERCISES, slug } from './library';
-import { PROGRAM_VERSION, buildProgram } from './program';
+import { PROGRAM_VERSION, buildProgram, patchProgramTemplates } from './program';
+import { warmupRamp, type WarmupStep } from '../engine/warmup';
+import { estimateSec, isCompound, planTimeCut, type CutItem, type CutPlan } from '../engine/timecut';
 import { deletePhotoBlob, savePhotoBlob } from './photos';
 import { fmtLoad, uid } from '../format';
 
@@ -29,6 +31,8 @@ export interface ActiveExercise extends LoggedExercise {
   drops: number[];
   /** The template exercise this came from, to rebuild it (e.g. on a station switch). */
   source: TemplateExercise;
+  /** Superset partner (another exercise in this workout): alternate sets, rest after both. */
+  pairWith?: string;
 }
 
 export interface ActiveWorkout {
@@ -77,6 +81,7 @@ interface Data {
   weeklyTargets: WeeklyTarget[];
   weeklyCheckIns: WeeklyCheckIn[];
   photos: Photo[];
+  circumferences: BodyMeasurement[];
   lifeEvents: LifeEvent[];
   exerciseOverrides: ExerciseOverride[];
   reports: CoachReport[];
@@ -116,6 +121,10 @@ interface Actions {
   swapExercise: (exId: string, exerciseId: string) => void;
   swapOptions: () => SwapOption[];
   swapAcrossWeek: (exId: string, option: SwapOption) => void;
+  doLater: (exId: string) => void;
+  minutesLeft: () => number;
+  previewTimeCut: (minutes: number) => CutPlan | null;
+  applyTimeCut: (minutes: number) => CutPlan | null;
   finishWorkout: (opts: { saveToTemplate: boolean }) => WorkoutSession | null;
   discardWorkout: () => void;
   deleteSession: (id: string) => void;
@@ -137,6 +146,7 @@ interface Actions {
   currentNutritionPhase: () => NutritionPhase | undefined;
   startNutritionPhase: (type: NutritionPhaseType, targetRate: number, reason: string, startWeight?: number, startWaistCm?: number) => void;
   addMeasurement: (m: Measurement) => void;
+  addCircumferences: (m: BodyMeasurement) => void;
   setWeeklyTarget: (t: WeeklyTarget) => void;
   completeWeeklyCheckIn: (c: WeeklyCheckIn) => void;
   addPhoto: (blob: Blob, pose: Photo['pose'], date: string) => Promise<Photo>;
@@ -171,6 +181,7 @@ const initialData: Data = {
   weeklyTargets: [],
   weeklyCheckIns: [],
   photos: [],
+  circumferences: [],
   lifeEvents: [],
   exerciseOverrides: [],
   reports: [],
@@ -188,12 +199,48 @@ const idbStorage: StateStorage = {
 
 const LOWER_BODY: Muscle[] = ['quads', 'hamstrings', 'glutes', 'calves'];
 
-function makeSets(targets: number[], weight: number, warmups = 0, rounding = 2.5): LoggedSet[] {
-  const warm: LoggedSet[] = Array.from({ length: warmups }, () => ({
-    id: uid(), weight: roundTo(weight * 0.5, rounding), targetReps: targets[0], reps: targets[0], completed: false, warmup: true,
-  }));
+function warmupSetsFor(steps: WarmupStep[]): LoggedSet[] {
+  return steps.map(st => ({ id: uid(), weight: st.weight, targetReps: st.reps, reps: st.reps, completed: false, warmup: true }));
+}
+
+/** Warm-up steps for an exercise at a working weight: an auto ramp, or the template's fixed count at 50%. */
+function warmupSteps(te: TemplateExercise, weight: number, kind: string, settings: Settings, firstReps: number): WarmupStep[] {
+  if (kind !== 'weighted' || weight <= 0) return [];
+  if (te.autoWarmup) {
+    const rounding = te.increment && te.increment < settings.weightRounding ? te.increment : settings.weightRounding;
+    return warmupRamp(weight, { loading: te.loading, barKg: settings.barKg ?? 20, rounding });
+  }
+  return Array.from({ length: te.warmupSets ?? 0 }, () => ({ weight: roundTo(weight * 0.5, settings.weightRounding), reps: firstReps }));
+}
+
+function makeSets(targets: number[], weight: number, warmups: WarmupStep[]): LoggedSet[] {
   const work: LoggedSet[] = targets.map(t => ({ id: uid(), weight, targetReps: t, reps: t, completed: false, warmup: false }));
-  return [...warm, ...work];
+  return [...warmupSetsFor(warmups), ...work];
+}
+
+/** Rebuild the not-yet-done warm-ups for a new working weight (done ones stay as logged). */
+function refreshWarmups(e: ActiveExercise, settings: Settings) {
+  const done = e.sets.filter(s => s.warmup && s.completed);
+  const fresh = warmupSetsFor(warmupSteps(e.source, e.workingWeight, e.kind ?? 'weighted', settings, e.targetReps)).slice(done.length);
+  e.sets = [...done, ...fresh, ...e.sets.filter(s => !s.warmup)];
+}
+
+function cutItems(a: ActiveWorkout, exercise: (id: string) => Exercise | undefined): CutItem[] {
+  return a.session.exercises.filter(e => !e.skipped).map(e => {
+    const ex = exercise(e.exerciseId);
+    return {
+      id: e.id,
+      name: ex?.name ?? e.exerciseId,
+      restSec: e.restSec,
+      setsLeft: e.sets.filter(s => !s.warmup && !s.completed).length,
+      warmupsLeft: e.sets.filter(s => s.warmup && !s.completed).length,
+      compound: isCompound(ex),
+      primary: ex?.primary ?? [],
+      isAbs: !!ex?.primary?.includes('abs'),
+      started: e.sets.some(s => s.completed),
+      pairWith: e.pairWith,
+    };
+  });
 }
 
 function toLogged(e: ActiveExercise): LoggedExercise {
@@ -300,7 +347,7 @@ export const useStore = create<Store>()(
           station,
           kind,
           swappedFrom: opts.swappedFrom,
-          sets: makeSets(targets, weight, te.warmupSets ?? 0, settings.weightRounding),
+          sets: makeSets(targets, weight, deload ? [] : warmupSteps(te, weight, kind, settings, targets[0])),
           baseWeight: weight,
           reason,
           flagged: plan.flagged,
@@ -414,11 +461,12 @@ export const useStore = create<Store>()(
           const targets = setTargets(target, e.drops, e.sets.filter(s => !s.warmup).length, e.technique ?? 'straight');
           let i = 0;
           for (const s of e.sets) {
-            if (s.warmup) { if (!s.completed) s.weight = roundTo(kg * 0.5, d.settings.weightRounding); continue; }
+            if (s.warmup) continue;
             s.weight = kg;
             s.targetReps = targets[i++] ?? target;
             if (!s.completed) s.reps = s.targetReps;
           }
+          if (!d.active!.session.deload) refreshWarmups(e, d.settings);
         }),
 
         applyWeight: (exId, kg, mode) => {
@@ -430,6 +478,7 @@ export const useStore = create<Store>()(
             e.workingWeight = kg;
             e.countsForProgression = mode === 'working' || kg === e.baseWeight;
             for (const s of e.sets) if (!s.warmup) s.weight = kg;
+            if (!d.active!.session.deload) refreshWarmups(e, d.settings);
           });
         },
 
@@ -502,6 +551,53 @@ export const useStore = create<Store>()(
               { date: option.date, templateId: option.templateId, replaceTeId: option.te.id, withTe: cur.source, fromLabel: todayLabel },
             ];
           });
+        },
+
+        doLater: exId => mutate(d => {
+          const list = d.active?.session.exercises;
+          if (!list) return;
+          const i = list.findIndex(x => x.id === exId);
+          if (i < 0) return;
+          const [ex] = list.splice(i, 1);
+          // A superset moves as a pair.
+          const j = ex.pairWith ? list.findIndex(x => x.id === ex.pairWith) : -1;
+          const partner = j >= 0 ? list.splice(j, 1) : [];
+          list.push(ex, ...partner);
+        }),
+
+        minutesLeft: () => {
+          const s = getState();
+          return s.active ? Math.round(estimateSec(cutItems(s.active, s.exercise)) / 60) : 0;
+        },
+        previewTimeCut: minutes => {
+          const s = getState();
+          return s.active ? planTimeCut(cutItems(s.active, s.exercise), minutes) : null;
+        },
+        applyTimeCut: minutes => {
+          const plan = getState().previewTimeCut(minutes);
+          if (!plan) return null;
+          mutate(d => {
+            const list = d.active!.session.exercises;
+            for (const it of plan.items) {
+              const e = list.find(x => x.id === it.id);
+              if (!e) continue;
+              e.restSec = it.restSec;
+              e.pairWith = it.pairWith;
+              if (it.skip) { e.skipped = true; continue; }
+              // Remove surplus not-yet-done working sets from the end.
+              let extra = e.sets.filter(s => !s.warmup && !s.completed).length - it.setsLeft;
+              for (let k = e.sets.length - 1; k >= 0 && extra > 0; k--) {
+                if (!e.sets[k].warmup && !e.sets[k].completed) { e.sets.splice(k, 1); extra--; }
+              }
+            }
+            // Superset partners sit next to each other.
+            for (const e of [...list]) {
+              if (!e.pairWith) continue;
+              const i = list.findIndex(x => x.id === e.id), j = list.findIndex(x => x.id === e.pairWith);
+              if (j > i + 1) list.splice(i + 1, 0, ...list.splice(j, 1));
+            }
+          });
+          return plan;
         },
 
         finishWorkout: ({ saveToTemplate }) => {
@@ -616,6 +712,7 @@ export const useStore = create<Store>()(
           d.nutritionPhases.forEach(p => { if (p.status === 'active') { p.status = 'completed'; p.endDate = today; } });
           d.nutritionPhases.push({ id: uid(), type, startDate: today, status: 'active', targetRate, reason, startWeight, startWaistCm });
         }),
+        addCircumferences: m => mutate(d => { d.circumferences = [...d.circumferences.filter(x => x.date !== m.date), m].sort((a, b) => a.date.localeCompare(b.date)); }),
         addMeasurement: m => mutate(d => { d.measurements = [...d.measurements.filter(x => x.date !== m.date), m].sort((a, b) => a.date.localeCompare(b.date)); }),
         setWeeklyTarget: t => mutate(d => { d.weeklyTargets = [...d.weeklyTargets.filter(x => x.weekStart !== t.weekStart), t].sort((a, b) => a.weekStart.localeCompare(b.weekStart)); }),
         completeWeeklyCheckIn: c => mutate(d => { d.weeklyCheckIns = [...d.weeklyCheckIns.filter(x => x.date !== c.date), c].sort((a, b) => a.date.localeCompare(b.date)); }),
@@ -641,6 +738,7 @@ export const useStore = create<Store>()(
           d.settings.basis = 'first';
           d.settings.programVersion = PROGRAM_VERSION;
           d.settings.programLoadedOn = ymd();
+          patchProgramTemplates(d.templates);
           d.exerciseOverrides = [];
         }),
         setScheduleDay: (dow, templateId) => mutate(d => {
@@ -721,8 +819,11 @@ export const useStore = create<Store>()(
       partialize: s => pickData(s),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<Data>;
+        // Templates from an earlier program version pick up warm-ups and plate loading.
+        if (p.templates) patchProgramTemplates(p.templates);
         return {
           ...current, ...p,
+          circumferences: p.circumferences ?? [],
           lifeEvents: p.lifeEvents ?? [],
           exerciseOverrides: p.exerciseOverrides ?? [],
           profile: { ...initialData.profile, ...p.profile },
@@ -746,6 +847,7 @@ function pickData(s: Data): Data {
     weeklyTargets: s.weeklyTargets,
     weeklyCheckIns: s.weeklyCheckIns,
     photos: s.photos,
+    circumferences: s.circumferences,
     lifeEvents: s.lifeEvents,
     exerciseOverrides: s.exerciseOverrides,
     reports: s.reports,

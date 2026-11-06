@@ -3,13 +3,13 @@ import { useStore } from '../data/store';
 import { LengthInput } from '../components/ui';
 import { PHASE_LABEL, planSnapshot, targetWeekFor } from '../data/plan';
 import { bodyFatFromWaist, composition, excludeDisrupted, nextTargets, rateFor, recommendPhase, targetFor } from '../engine/body';
-import { addDays, weekStart, ymd } from '../engine/dates';
+import { addDays, daysBetween, weekStart, ymd } from '../engine/dates';
 import { mean } from '../engine/stats';
 import { promisesFor } from '../engine/schedule';
 import { compressImage, loadPhotoBlob } from '../data/photos';
 import { backupToGist } from '../data/backup';
 import { fmtBw, fmtLen, fmtRateW } from '../format';
-import type { ClothesFit, NutritionPhaseType, Photo } from '../types';
+import type { BodyMeasurement, ClothesFit, NutritionPhaseType, Photo } from '../types';
 import { generateReport } from './Coach';
 
 const POSES: Photo['pose'][] = ['front', 'side', 'back'];
@@ -64,11 +64,16 @@ export function WeeklyCheckInScreen({ go }: { go: (r: string) => void }) {
     setPhotoIds(ids => [...ids.filter(i => s.photos.find(x => x.id === i)?.pose !== pose), p.id]);
   };
 
+  const lastTape = s.circumferences[s.circumferences.length - 1];
+  const tapeDue = !lastTape || daysBetween(lastTape.date, today) >= 27;
+  const [tape, setTape] = useState<Omit<BodyMeasurement, 'date'>>({});
+
   const finish = async () => {
     setBusy(true);
     setError(undefined);
     try {
       if (waistCm) s.addMeasurement({ date: today, waistCm });
+      if (Object.values(tape).some(v => v)) s.addCircumferences({ date: today, ...tape });
       let decisionText = rec?.reason;
       if (switching && nextType) {
         s.startNutritionPhase(nextType, nextRate, rec!.reason, rec!.comp.weight, waistCm);
@@ -133,6 +138,24 @@ export function WeeklyCheckInScreen({ go }: { go: (r: string) => void }) {
           </div>
         </div>
       </div>
+
+      {tapeDue && (
+        <>
+          <h2 className="section-title">Monthly tape measurements</h2>
+          <div className="card stack">
+            <p className="tiny muted">Relaxed, tape snug not tight. Arm: flexed, around the peak of your bicep. Chest: under the armpits, at the nipples. Shoulders: around the widest point. Thigh: midway between hip and knee.</p>
+            <div className="row">
+              <div className="field grow"><label>Arm (flexed)</label><LengthInput cm={tape.armCm} onChange={v => setTape(t => ({ ...t, armCm: v }))} /></div>
+              <div className="field grow"><label>Chest</label><LengthInput cm={tape.chestCm} onChange={v => setTape(t => ({ ...t, chestCm: v }))} /></div>
+            </div>
+            <div className="row">
+              <div className="field grow"><label>Shoulders</label><LengthInput cm={tape.shouldersCm} onChange={v => setTape(t => ({ ...t, shouldersCm: v }))} /></div>
+              <div className="field grow"><label>Thigh</label><LengthInput cm={tape.thighCm} onChange={v => setTape(t => ({ ...t, thighCm: v }))} /></div>
+            </div>
+            {lastTape && <p className="tiny muted">Last time ({lastTape.date}): {(['armCm', 'chestCm', 'shouldersCm', 'thighCm'] as const).filter(k => lastTape[k]).map(k => `${k.replace('Cm', '')} ${fmtLen(lastTape[k]!, lu)}`).join(' · ')}</p>}
+          </div>
+        </>
+      )}
 
       <h2 className="section-title">Progress photos (optional)</h2>
       <div className="card stack">

@@ -17,6 +17,9 @@ interface Ex {
   cable?: boolean;
   myo?: boolean;
   note?: string;
+  /** Auto warm-up ramp (first big lift of the day). */
+  warm?: boolean;
+  loading?: 'barbell' | 'per-side';
 }
 
 /**
@@ -26,19 +29,19 @@ interface Ex {
 const PROGRAM: { name: string; day: number; exercises: Ex[] }[] = [
   {
     name: 'Upper', day: 1, exercises: [
-      { name: '45° Incline Barbell Press', reps: [6, 8], rest: 180, inc: 2.5, note: 'Fresh start — try ~70kg for 6–8.' },
+      { name: '45° Incline Barbell Press', reps: [6, 8], rest: 180, inc: 2.5, warm: true, loading: 'barbell', note: 'Fresh start — try ~70kg for 6–8.' },
       { name: 'Decline Cable Fly', reps: [8, 10], rest: 90, cable: true, note: 'Last log 10.2kg × 10 (for 10–12) — go a little heavier.' },
       { name: 'Assisted Wide-Grip Pull-Up', reps: [8, 10], rest: 150, seed: [14, [8, 7, 6]], note: 'Weight = assistance. Less is progress; at 0 it becomes bodyweight pull-ups.' },
       { name: 'High-Cable Lateral Raise', reps: [8, 10], rest: 90, cable: true, myo: true, note: 'Last log 5.7kg × 11 (for 10–12).' },
       { name: 'Chest-Supported Machine Row', reps: [8, 10], rest: 120, seed: [50, [9, 8, 7]], inc: 2.5 },
       { name: 'EZ-Bar Skull Crusher', reps: [8, 10], rest: 90, inc: 2.5 },
-      { name: 'EZ-Bar Reverse Curl', reps: [8, 10], rest: 90, seed: [7.5, [9, 8, 7]], inc: 1.25, note: 'kg per side.' },
+      { name: 'EZ-Bar Reverse Curl', reps: [8, 10], rest: 90, seed: [7.5, [9, 8, 7]], inc: 1.25, loading: 'per-side', note: 'kg per side.' },
       { name: 'Roman Chair Leg Raise', reps: [10, 20], rest: 60 },
     ],
   },
   {
     name: 'Lower', day: 2, exercises: [
-      { name: 'Back Squat', reps: [6, 8], rest: 180, inc: 2.5 },
+      { name: 'Back Squat', reps: [6, 8], rest: 180, inc: 2.5, warm: true, loading: 'barbell' },
       { name: 'Lying Leg Curl', reps: [8, 10], rest: 90, inc: 2.5 },
       { name: 'Leg Extension', reps: [8, 10], rest: 90, start: 50, inc: 2.5 },
       { name: 'DB RDL', reps: [8, 10], rest: 120, inc: 2, note: 'kg per DB.' },
@@ -48,7 +51,7 @@ const PROGRAM: { name: string; day: number; exercises: Ex[] }[] = [
   },
   {
     name: 'Pull', day: 4, exercises: [
-      { name: 'Barbell Row', reps: [6, 8], rest: 150, inc: 2.5 },
+      { name: 'Barbell Row', reps: [6, 8], rest: 150, inc: 2.5, warm: true, loading: 'barbell' },
       { name: 'Neutral-Grip Lat Pulldown', reps: [8, 10], rest: 120, inc: 2.5, note: 'Last log 52kg × 10 (for 10–12).' },
       { name: 'Single-Arm Cable Pulldown', reps: [10, 12], rest: 90, cable: true, seed: [16.5, [11, 8, 7]], note: 'kg per arm.' },
       { name: 'Dual-Handle Seated Cable Row', reps: [10, 12], rest: 120, cable: true, seed: [16.5, [11, 9, 8]], note: 'One handle on each pulley.' },
@@ -61,9 +64,9 @@ const PROGRAM: { name: string; day: number; exercises: Ex[] }[] = [
   },
   {
     name: 'Push', day: 5, exercises: [
-      { name: 'Incline DB Press', reps: [8, 10], rest: 150, inc: 2, note: 'kg per DB.' },
+      { name: 'Incline DB Press', reps: [8, 10], rest: 150, inc: 2, warm: true, note: 'kg per DB.' },
       { name: 'Chest Dips', reps: [8, 10], rest: 120, seed: [0, [8, 7, 6]], inc: 2.5, note: 'Lean forward for chest. Belt on once set 1 hits 10.' },
-      { name: 'Machine Shoulder Press', reps: [8, 10], rest: 120, seed: [25, [9, 7, 6]], inc: 2.5, note: 'Plate-loaded, kg per side.' },
+      { name: 'Machine Shoulder Press', reps: [8, 10], rest: 120, seed: [25, [9, 7, 6]], inc: 2.5, loading: 'per-side', note: 'Plate-loaded, kg per side.' },
       { name: 'Pec Deck', reps: [10, 12], rest: 90, inc: 2.5, note: 'Last log 66kg × 8 (for 8–10).' },
       { name: 'Cable Upright Row', reps: [8, 10], rest: 90, cable: true, seed: [37.5, [9, 8, 7]] },
       { name: 'Cable Triceps Pushdown', reps: [8, 10], rest: 90, cable: true, note: 'Last log 26.1kg × 10 (for 10–12) — go heavier.' },
@@ -74,7 +77,7 @@ const PROGRAM: { name: string; day: number; exercises: Ex[] }[] = [
   },
   {
     name: 'Legs', day: 6, exercises: [
-      { name: 'Leg Press', reps: [8, 10], rest: 150, seed: [85, [8, 7, 6]], inc: 5, note: 'kg per side.' },
+      { name: 'Leg Press', reps: [8, 10], rest: 150, seed: [85, [8, 7, 6]], inc: 5, warm: true, loading: 'per-side', note: 'kg per side.' },
       { name: 'Seated Leg Curl', reps: [10, 12], rest: 90, inc: 2.5, note: 'Last log 42.5kg × 12 (for 8–10).' },
       { name: 'Hack Squat', reps: [8, 10], rest: 150, inc: 5 },
       { name: 'Lying Leg Curl', reps: [8, 10], rest: 90, inc: 2.5 },
@@ -103,7 +106,23 @@ function toTemplateExercise(e: Ex): TemplateExercise {
     cable: e.cable || undefined,
     station: e.cable ? 'small' : undefined,
     seed: e.seed ? { weight: e.seed[0], reps: e.seed[1] } : undefined,
+    autoWarmup: e.warm || undefined,
+    loading: e.loading,
   };
+}
+
+/** Bring templates loaded from an earlier version up to date (warm-ups, plate loading) without touching your edits. */
+export function patchProgramTemplates(templates: WorkoutTemplate[]): boolean {
+  let changed = false;
+  for (const t of templates) {
+    for (const te of t.exercises) {
+      const def = PROGRAM.flatMap(p => p.exercises).find(e => slug(e.name) === te.exerciseId);
+      if (!def) continue;
+      if (def.warm && te.autoWarmup === undefined && t.exercises[0]?.id === te.id) { te.autoWarmup = true; changed = true; }
+      if (def.loading && te.loading === undefined) { te.loading = def.loading; changed = true; }
+    }
+  }
+  return changed;
 }
 
 export function buildProgram(): { templates: WorkoutTemplate[]; schedule: (string | null)[] } {

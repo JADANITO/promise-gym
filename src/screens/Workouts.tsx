@@ -154,6 +154,15 @@ function SortableExercise({ ex, title, onPatch, onRemove }: { ex: TemplateExerci
       <div className="row wrap">
         <label className="row small"><input type="checkbox" checked={!!ex.cable} onChange={e => onPatch({ cable: e.target.checked || undefined, station: e.target.checked ? ex.station ?? 'small' : undefined })} style={{ width: 22, height: 22 }} /> Cable (big/small station)</label>
         <label className="row small"><input type="checkbox" checked={ex.technique === 'myo-match'} onChange={e => onPatch({ technique: e.target.checked ? 'myo-match' : undefined })} style={{ width: 22, height: 22 }} /> Myo-rep match</label>
+        <label className="row small"><input type="checkbox" checked={!!ex.autoWarmup} onChange={e => onPatch({ autoWarmup: e.target.checked || undefined })} style={{ width: 22, height: 22 }} /> Auto warm-up</label>
+      </div>
+      <div className="field">
+        <label>Weight is…</label>
+        <select className="input" value={ex.loading ?? ''} onChange={e => onPatch({ loading: (e.target.value || undefined) as TemplateExercise['loading'] })}>
+          <option value="">Just the number (dumbbells, stack, cable)</option>
+          <option value="barbell">Total on a barbell (shows plates per side)</option>
+          <option value="per-side">Per side on a plate-loaded machine (shows plates)</option>
+        </select>
       </div>
       <p className="tiny muted">Leave starting weight empty and you'll pick it in your first session. The step pre-fills weight increases (e.g. +5 on a pin-loaded stack).</p>
       <div className="field"><label>Machine / equipment note</label><input className="input" placeholder="e.g. Hammer Strength, seat 4" value={ex.machineNote ?? ''} onChange={e => onPatch({ machineNote: e.target.value || undefined })} /></div>

@@ -154,7 +154,10 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
           <div className="field grow"><label>Deload weight</label><NumberField value={Math.round(st.deloadWeightPct * 1000) / 10} step={0.5} suffix="%" onChange={n => set({ deloadWeightPct: Math.min(100, n ?? 87.5) / 100 })} /></div>
           <div className="field grow"><label>Deload sets</label><NumberField value={Math.round(st.deloadSetFactor * 100)} suffix="%" onChange={n => set({ deloadSetFactor: Math.min(100, Math.max(10, n ?? 50)) / 100 })} /></div>
         </div>
-        <div className="field"><label>Deload weight rounding</label><NumberField value={st.weightRounding} step={0.5} suffix="kg" onChange={n => set({ weightRounding: n ?? 2.5 })} /></div>
+        <div className="row">
+          <div className="field grow"><label>Deload weight rounding</label><NumberField value={st.weightRounding} step={0.5} suffix="kg" onChange={n => set({ weightRounding: n ?? 2.5 })} /></div>
+          <div className="field grow"><label>Barbell weight</label><NumberField value={st.barKg ?? 20} step={0.5} suffix="kg" onChange={n => set({ barKg: n ?? 20 })} /></div>
+        </div>
         <label className="row"><input type="checkbox" checked={st.keepAwake} onChange={e => set({ keepAwake: e.target.checked })} style={{ width: 22, height: 22 }} /> Keep screen on during workouts</label>
         <label className="row"><input type="checkbox" checked={st.timerSound} onChange={e => set({ timerSound: e.target.checked })} style={{ width: 22, height: 22 }} /> Beep when rest is over</label>
         {block?.type === 'gaining' && <button className="btn" onClick={() => setDeloadOpen(true)}>Start a deload week now</button>}

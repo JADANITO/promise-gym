@@ -48,6 +48,10 @@ export interface TemplateExercise {
   station?: CableStation;
   /** Last logged numbers from before the app, used until real history exists. */
   seed?: { weight: number; reps: number[] };
+  /** Generate warm-up sets from the working weight (first big lift of the day). */
+  autoWarmup?: boolean;
+  /** How the number is loaded, for the plate calculator. */
+  loading?: 'barbell' | 'per-side';
 }
 
 export interface WorkoutTemplate {
@@ -181,6 +185,15 @@ export interface Measurement {
   waistCm: number;
 }
 
+/** Monthly tape measurements that show whether a lean bulk is adding muscle. */
+export interface BodyMeasurement {
+  date: string;
+  armCm?: number;
+  chestCm?: number;
+  shouldersCm?: number;
+  thighCm?: number;
+}
+
 export type ClothesFit = 'looser' | 'same' | 'tighter';
 
 export interface WeeklyTarget {
@@ -249,5 +262,7 @@ export interface Settings {
   programVersion?: string;
   /** Date the current program was loaded, for "time to specialise" advice. */
   programLoadedOn?: string;
+  /** Olympic bar weight for the plate calculator. */
+  barKg?: number;
   onboarded: boolean;
 }

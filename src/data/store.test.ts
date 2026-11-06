@@ -123,3 +123,39 @@ describe('days off', () => {
     expect(plannedFor(S().settings, '2026-11-11', S().lifeEvents)).toBe(tpl('Upper').id);
   });
 });
+
+describe('warm-ups, later and short on time', () => {
+  it('leg press (85kg per side) gets a warm-up ramp', () => {
+    S().startWorkout(tpl('Legs').id, false);
+    const warm = activeEx('leg-press').sets.filter(s => s.warmup);
+    expect(warm.map(s => s.weight)).toEqual([42.5, 60, 72.5]);
+  });
+
+  it('incline press warm-ups appear once you pick the working weight', () => {
+    S().startWorkout(tpl('Upper').id, false);
+    const press = activeEx('45-incline-barbell-press');
+    expect(press.sets.filter(s => s.warmup)).toHaveLength(0);
+    S().setIncreaseWeight(press.id, 70);
+    expect(activeEx(press.exerciseId).sets.filter(s => s.warmup).map(s => s.weight)).toEqual([20, 35, 50, 60]);
+  });
+
+  it('"Later" moves an exercise to the end', () => {
+    S().startWorkout(tpl('Push').id, false);
+    const pec = activeEx('pec-deck');
+    S().doLater(pec.id);
+    const list = S().active!.session.exercises;
+    expect(list[list.length - 1].id).toBe(pec.id);
+  });
+
+  it('short on time keeps compounds whole and pairs isolations next to each other', () => {
+    S().startWorkout(tpl('Push').id, false);
+    const plan = S().applyTimeCut(45)!;
+    expect(plan.afterMin).toBeLessThanOrEqual(45);
+    const list = S().active!.session.exercises;
+    expect(working('incline-db-press')).toHaveLength(3);
+    for (const e of list.filter(x => x.pairWith)) {
+      const i = list.indexOf(e), j = list.findIndex(x => x.id === e.pairWith);
+      expect(Math.abs(i - j)).toBe(1);
+    }
+  });
+});

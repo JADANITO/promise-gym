@@ -1,4 +1,4 @@
-import type { CoachReport, DailyCheckIn, Exercise, LifeEvent, Measurement, NutritionPhase, Phase, Profile, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate } from '../types';
+import type { BodyMeasurement, CoachReport, DailyCheckIn, Exercise, LifeEvent, Measurement, NutritionPhase, Phase, Profile, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate } from '../types';
 import { achievedReps, computeProgress } from './progression';
 import { analyzePlateau, phaseWeek, plateauCheckDue } from './phases';
 import { addDays, daysBetween, weekStart, ymd } from './dates';
@@ -20,6 +20,7 @@ export interface CoachInput {
   nutritionPhase?: NutritionPhase;
   exercises: Exercise[];
   events?: LifeEvent[];
+  circumferences?: BodyMeasurement[];
   name: (id: string) => string;
 }
 
@@ -44,6 +45,8 @@ export interface WeekStats {
   disruptions: string[];
   /** Full weeks on the current program. */
   weeksOnProgram: number;
+  /** Tape changes (cm) between the latest monthly measurement and one 3+ weeks earlier. */
+  tape: { weeks: number; fresh: boolean; arm: number | null; chest: number | null; shoulders: number | null; thigh: number | null; waist: number | null } | null;
   notes: string[];
 }
 
@@ -136,8 +139,28 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
     volume: TRACKED_MUSCLES.map(m => ({ muscle: muscleLabel(m), sets: Math.round((vol[m] ?? 0) * 10) / 10, range: volumeRange(m) })),
     promisesKept: { kept: promises.kept, total: promises.total },
     disruptions,
+    tape: tapeChange(input, from),
     weeksOnProgram: settings.programLoadedOn ? Math.floor(daysBetween(settings.programLoadedOn, today) / 7) : 0,
     notes,
+  };
+}
+
+function tapeChange(input: CoachInput, weekFrom: string): WeekStats['tape'] {
+  const rows = input.circumferences ?? [];
+  const last = rows[rows.length - 1];
+  if (!last) return null;
+  const base = [...rows].reverse().find(r => daysBetween(r.date, last.date) >= 21);
+  if (!base) return null;
+  const waistAt = (date: string) => [...input.measurements].filter(m => m.date <= date).sort((a, b) => b.date.localeCompare(a.date))[0]?.waistCm;
+  const d = (a?: number, b?: number) => (a != null && b != null ? Math.round((b - a) * 10) / 10 : null);
+  return {
+    weeks: Math.round(daysBetween(base.date, last.date) / 7),
+    fresh: last.date >= weekFrom,
+    arm: d(base.armCm, last.armCm),
+    chest: d(base.chestCm, last.chestCm),
+    shoulders: d(base.shouldersCm, last.shouldersCm),
+    thigh: d(base.thighCm, last.thighCm),
+    waist: d(waistAt(base.date), waistAt(last.date)),
   };
 }
 
@@ -165,11 +188,23 @@ export function rulesReport(s: WeekStats): Advice {
   if (s.nutritionPhase?.status === 'on-track') wins.push('Bodyweight is moving exactly as planned.');
   const { avgSleepHours: hrs, nightsLogged, nightsUnder6h } = s.recovery;
   if (hrs != null && nightsLogged >= 5 && hrs >= 7.5) wins.push(`Averaged ${hrs}h of sleep — that's where the muscle gets built.`);
+  // Monthly tape: arms/chest up with a steady waist is muscle; a growing waist alone is fat.
+  const t = s.tape;
+  const sign = (n: number | null) => (n == null ? '—' : `${n >= 0 ? '+' : ''}${n}cm`);
+  if (t?.fresh) {
+    const gain = Math.max(t.arm ?? -9, t.chest ?? -9);
+    if (gain >= 0.5 && (t.waist ?? 0) <= 1) {
+      wins.push(`Tape over ${t.weeks} weeks: arms ${sign(t.arm)}, chest ${sign(t.chest)}, waist ${sign(t.waist)} — that's muscle, not fat.`);
+    }
+  }
   if (s.protein.target && s.protein.daysHit >= 6) wins.push(`Protein target hit ${s.protein.daysHit} of 7 days.`);
   if (!wins.length) wins.push(s.workoutsDone ? 'You showed up. Build on it this week.' : 'Nothing logged yet — this week is a clean slate.');
 
   const changes: string[] = [];
   const disrupted = s.disruptions.length > 0;
+  if (t?.fresh && s.nutritionPhase?.type === 'bulk' && (t.waist ?? 0) >= 1.5 && Math.max(t.arm ?? 0, t.chest ?? 0) < 0.5) {
+    changes.push(`Waist ${sign(t.waist)} in ${t.weeks} weeks but arms and chest barely moved — the extra is mostly fat. Trim about 150 kcal/day and keep pushing the lifts.`);
+  }
   if (disrupted) {
     changes.push(`${s.disruptions.join(', ')} this week — no catching up and no crash dieting. Straight back to the normal plan; the scale will read high for a few days (water), so ignore it.`);
   }

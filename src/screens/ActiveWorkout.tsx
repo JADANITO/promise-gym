@@ -4,6 +4,8 @@ import type { CableStation, LoggedSet } from '../types';
 import { ExercisePicker, NumberField, Sheet, WeightInput } from '../components/ui';
 import { fmtClock, fmtDuration, fmtLoad, fmtW, uid } from '../format';
 import { beep, notify, unlockAudio, vibrate } from '../alerts';
+import { loadingText } from '../engine/warmup';
+import { SUPERSET_SWITCH_SEC } from '../engine/timecut';
 
 export function ActiveWorkout({ go }: { go: (r: string) => void }) {
   const active = useStore(s => s.active);
@@ -13,7 +15,9 @@ export function ActiveWorkout({ go }: { go: (r: string) => void }) {
   const [picking, setPicking] = useState(false);
   const [addWeightFor, setAddWeightFor] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [short, setShort] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const minutesLeft = useStore(s => (s.active ? s.minutesLeft() : 0));
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
@@ -43,11 +47,12 @@ export function ActiveWorkout({ go }: { go: (r: string) => void }) {
           <div className="row small muted">
             {session.deload && <span className="pill deload">DELOAD</span>}
             {active.holdTargets && <span className="pill warn">Repeating last targets</span>}
-            <span>{fmtDuration(now - session.startedAt)} · {remainingSets} sets left</span>
+            <span>{fmtDuration(now - session.startedAt)} · {remainingSets} sets · ~{minutesLeft} min left</span>
           </div>
         </div>
         <button className="btn primary sm" onClick={() => setFinishing(true)}>Finish</button>
       </div>
+      {remainingSets > 0 && <button className="btn sm ghost" onClick={() => setShort(true)}>Short on time?</button>}
 
       {session.exercises.map(e => <ExerciseCard key={e.id} ex={e} deload={session.deload} />)}
 
@@ -55,6 +60,7 @@ export function ActiveWorkout({ go }: { go: (r: string) => void }) {
 
       <ExercisePicker open={picking} onClose={() => setPicking(false)} onPick={id => { setPicking(false); setAddWeightFor(id); }} />
       <AddWeightSheet exerciseId={addWeightFor} onClose={() => setAddWeightFor(null)} onAdd={(id, kg) => { addExercise(id, kg); setAddWeightFor(null); }} />
+      <ShortOnTimeSheet open={short} onClose={() => setShort(false)} />
       <FinishSheet open={finishing} onClose={() => setFinishing(false)} remainingSets={remainingSets} onDone={id => go(id ? `summary/${id}` : 'home')} />
       {timer && <RestTimerBar />}
     </div>
@@ -93,6 +99,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const completeSet = useStore(s => s.completeSet);
   const retarget = useStore(s => s.retarget);
   const setStation = useStore(s => s.setStation);
+  const doLater = useStore(s => s.doLater);
   const startTimer = useStore(s => s.startTimer);
   const setIncrease = useStore(s => s.setIncreaseWeight);
   const last = useLastTime(ex);
@@ -111,6 +118,9 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const load = (kg: number) => fmtLoad(kg, kind, units);
   const myo = ex.technique === 'myo-match';
   const firstSetId = working[0]?.id;
+  const barKg = useStore(s => s.settings.barKg ?? 20);
+  const partner = useStore(s => (ex.pairWith ? s.active?.session.exercises.find(e => e.id === ex.pairWith) : undefined));
+  const plates = pickWeight ? null : loadingText(ex.workingWeight, ex.source.loading, barKg);
 
   const mutateEx = (fn: (e: ActiveExercise) => void) => update(a => {
     const e = a.session.exercises.find(x => x.id === ex.id);
@@ -120,12 +130,28 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const toggle = (setId: string) => {
     unlockAudio();
     const set = ex.sets.find(s => s.id === setId)!;
-    if (completeSet(ex.id, setId)) {
-      const idx = working.findIndex(s => s.id === setId) + 1;
-      const next = working[idx];
-      const after = next ? ` · next: ${myo ? 'match' : 'aim for'} ${useStore.getState().active?.session.exercises.find(e => e.id === ex.id)?.sets.find(s => s.id === next.id)?.targetReps ?? next.targetReps}` : '';
-      startTimer(ex.restSec, set.warmup ? `${title} · warm-up` : `${title} · set ${idx} done${after}`);
+    if (!completeSet(ex.id, setId)) return;
+    if (set.warmup) {
+      const nextWarm = ex.sets.filter(s => s.warmup && !s.completed && s.id !== setId).length;
+      startTimer(nextWarm ? 45 : 90, nextWarm ? `${title} · next warm-up` : `${title} · warm-ups done — first working set next`);
+      return;
     }
+    const idx = working.findIndex(s => s.id === setId) + 1;
+    // Superset: go straight to the partner if it's behind, rest after both.
+    if (partner && !partner.skipped) {
+      const mine = working.filter(s => s.completed || s.id === setId).length;
+      const theirs = partner.sets.filter(s => !s.warmup && s.completed).length;
+      const partnerLeft = partner.sets.some(s => !s.warmup && !s.completed);
+      if (partnerLeft && theirs < mine) {
+        startTimer(SUPERSET_SWITCH_SEC, `${title} · set ${idx} done → ${name(partner.exerciseId)} now`);
+        return;
+      }
+      startTimer(Math.max(ex.restSec, partner.restSec), `Superset round ${idx} done — rest, then ${name(ex.exerciseId)}`);
+      return;
+    }
+    const next = working[idx];
+    const after = next ? ` · next: ${myo ? 'match' : 'aim for'} ${useStore.getState().active?.session.exercises.find(e => e.id === ex.id)?.sets.find(s => s.id === next.id)?.targetReps ?? next.targetReps}` : '';
+    startTimer(ex.restSec, `${title} · set ${idx} done${after}`);
   };
   const setReps = (setId: string, fn: (r: number) => number) => {
     mutateEx(e => { const x = e.sets.find(y => y.id === setId)!; x.reps = Math.max(0, fn(x.reps)); });
@@ -152,9 +178,11 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
           <span className="pill num">Set 1: {ex.targetReps} reps · Range {ex.repMin}–{ex.repMax}</span>
           <span className="pill num">Rest {fmtClock(ex.restSec)}</span>
           {myo && <span className="pill">Myo-rep match</span>}
+          {partner && <span className="pill accent">Superset with {name(partner.exerciseId)}</span>}
           {ex.swappedFrom && <span className="pill warn">From {ex.swappedFrom}</span>}
           {!ex.countsForProgression && <span className="pill warn">One-off weight</span>}
         </div>
+        {plates && <p className="small mt"><b>Load:</b> {plates}</p>}
         {ex.station && (
           <div className="row mt" role="group" aria-label="Cable station">
             <span className="small muted">Cable:</span>
@@ -206,7 +234,9 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
                   {s.rpe != null && <div className="tiny muted">@{s.rpe}</div>}
                 </button>
                 <button className="set-w num" onClick={() => setSheet({ setId: s.id })}>
-                  <b>{pickWeight && !s.warmup ? '—' : load(s.weight)}</b><br />{isMatch ? 'match' : 'target'} {s.targetReps}
+                  <b>{pickWeight && !s.warmup ? '—' : load(s.weight)}</b><br />
+                  {s.warmup ? `warm-up × ${s.targetReps}` : `${isMatch ? 'match' : 'target'} ${s.targetReps}`}
+                  {s.warmup && ex.source.loading && <span className="tiny" style={{ display: 'block' }}>{loadingText(s.weight, ex.source.loading, barKg)}</span>}
                 </button>
                 <div className="stepper">
                   <button aria-label="One less rep" onClick={() => setReps(s.id, r => r - 1)}>−</button>
@@ -238,6 +268,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
           <button className="btn sm" onClick={() => setSheet('weight')}>Weight</button>
           <button className="btn sm" onClick={() => setSheet('rest')}>Rest</button>
           <button className="btn sm" onClick={() => setSheet('swap')}>Swap</button>
+          {working.some(s => !s.completed) && <button className="btn sm" onClick={() => doLater(ex.id)}>Later</button>}
         </>}
         <button className="btn sm ghost" onClick={() => mutateEx(e => { e.skipped = !e.skipped; })}>{ex.skipped ? 'Unskip' : 'Skip'}</button>
       </div>
@@ -247,6 +278,33 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
       <SwapSheet open={sheet === 'swap'} ex={ex} title={title} onClose={() => setSheet(null)} />
       {typeof sheet === 'object' && sheet && <SetSheet ex={ex} setId={sheet.setId} onClose={() => setSheet(null)} />}
     </div>
+  );
+}
+
+/** Fit the rest of the session into the time you have, protecting the big lifts. */
+function ShortOnTimeSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const s = useStore();
+  const [minutes, setMinutes] = useState(45);
+  if (!open || !s.active) return null;
+  const plan = s.previewTimeCut(minutes);
+  return (
+    <Sheet open onClose={onClose} title="Short on time?">
+      <div className="stack">
+        <p className="small muted">How long have you got left? Big compound lifts stay as they are; isolation work gets paired, shortened or dropped.</p>
+        <div className="chips">
+          {[30, 45, 60, 75].map(m => <button key={m} className={`chip ${minutes === m ? 'on' : ''}`} onClick={() => setMinutes(m)}>{m} min</button>)}
+        </div>
+        {plan && (plan.changes.length ? (
+          <div className="card tight stack" style={{ gap: 4 }}>
+            <b className="small">~{plan.beforeMin} min → ~{plan.afterMin} min</b>
+            <ul className="clean small">{plan.changes.map(c => <li key={c}>{c}</li>)}</ul>
+            {!plan.fits && <p className="small" style={{ color: 'var(--warn)' }}>Even trimmed it runs over — consider moving this session to another day from Home.</p>}
+          </div>
+        ) : <p className="small">You've got time — about {plan.beforeMin} minutes left as planned.</p>)}
+        <button className="btn primary block" disabled={!plan?.changes.length} onClick={() => { s.applyTimeCut(minutes); onClose(); }}>Apply</button>
+        <p className="tiny muted">Supersets: do a set of the first, go straight to the second, then rest. Dropped sets don't count against your progression.</p>
+      </div>
+    </Sheet>
   );
 }
 

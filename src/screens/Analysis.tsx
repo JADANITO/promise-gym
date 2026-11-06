@@ -343,6 +343,7 @@ function Body({ range, go }: { range: Range; go: (r: string) => void }) {
           </table>
         </TableToggle>
       </div>
+      <TapeCard />
       <button className="btn block" onClick={() => go('photos')}>📷 Progress photos ({s.photos.length})</button>
     </div>
   );
@@ -454,6 +455,45 @@ function Muscles() {
           );
         })}
         <p className="tiny muted">Primary muscles count a full set, secondary muscles half. Aim for 10–20 hard sets (calves 8+, abs 6+). Deload weeks aren't counted.</p>
+      </div>
+    </div>
+  );
+}
+
+/** Monthly tape: the lean-bulk tell — arms and chest up while the waist holds. */
+function TapeCard() {
+  const s = useStore();
+  const lu = s.settings.lengthUnits;
+  const rows = s.circumferences;
+  if (!rows.length) return <div className="card small muted">Arm, chest, shoulder and thigh measurements are asked for once a month at your Sunday check-in.</div>;
+  const first = rows[0], last = rows[rows.length - 1];
+  const waistAt = (date: string) => [...s.measurements].filter(m => m.date <= date).sort((a, b) => b.date.localeCompare(a.date))[0]?.waistCm;
+  const fields = [['armCm', 'Arm'], ['chestCm', 'Chest'], ['shouldersCm', 'Shoulders'], ['thighCm', 'Thigh']] as const;
+  const change = (a?: number, b?: number) => (a != null && b != null ? `${b - a >= 0 ? '+' : '−'}${fmtLen(Math.abs(b - a), lu)}` : '—');
+  const w0 = waistAt(first.date), w1 = waistAt(last.date);
+  return (
+    <div className="card">
+      <div className="row between"><h3 className="bold">Tape measurements</h3><span className="muted small">{lu}</span></div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={tableStyle}>
+          <thead><tr><th align="left">Date</th>{fields.map(([, l]) => <th key={l} align="right">{l}</th>)}<th align="right">Waist</th></tr></thead>
+          <tbody>
+            {[...rows].reverse().map(r => (
+              <tr key={r.date}>
+                <td style={{ padding: '6px 0' }}>{fmtDate(r.date)}</td>
+                {fields.map(([k]) => <td key={k} align="right">{r[k] != null ? toLen(r[k]!, lu) : '—'}</td>)}
+                <td align="right">{waistAt(r.date) != null ? toLen(waistAt(r.date)!, lu) : '—'}</td>
+              </tr>
+            ))}
+            {rows.length > 1 && (
+              <tr style={{ fontWeight: 700, borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '6px 0' }}>Change</td>
+                {fields.map(([k]) => <td key={k} align="right">{change(first[k], last[k])}</td>)}
+                <td align="right">{change(w0, w1)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
