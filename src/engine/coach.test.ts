@@ -8,7 +8,7 @@ const base: WeekStats = {
   calories: { target: 3000, maintenanceEstimate: 2700, average: 3000, daysLogged: 7 },
   protein: { target: 150, average: 150, daysLogged: 7, daysHit: 7 },
   recovery: { avgSleepHours: null, nightsLogged: 0, nightsUnder6h: 0 },
-  volume: [], promisesKept: { kept: 10, total: 10 }, notes: [],
+  volume: [], promisesKept: { kept: 10, total: 10 }, disruptions: [], weeksOnProgram: 1, notes: [],
 };
 
 describe('sleep coaching', () => {
@@ -24,5 +24,28 @@ describe('sleep coaching', () => {
   it('says nothing when sleep is not logged', () => {
     const r = rulesReport(base);
     expect([...r.wins, ...r.changes].join(' ')).not.toMatch(/sleep/i);
+  });
+});
+
+describe('time off', () => {
+  it('tells you not to compensate after illness and skips missed-workout nagging', () => {
+    const r = rulesReport({ ...base, workoutsDone: 2, disruptions: ['Ill 3 days'] });
+    expect(r.changes[0]).toContain('Ill 3 days');
+    expect(r.changes.join(' ')).not.toContain('You trained 2 of 5');
+  });
+});
+
+describe('specialisation', () => {
+  const volume = [
+    { muscle: 'Side delts', sets: 10.5, range: [10, 20] as [number, number] },
+    { muscle: 'Rear delts', sets: 9, range: [10, 20] as [number, number] },
+    { muscle: 'Biceps', sets: 15, range: [10, 20] as [number, number] },
+  ];
+  it('suggests extra volume for the weakest fast-recovering muscle after 8 solid weeks', () => {
+    const r = rulesReport({ ...base, weeksOnProgram: 9, volume });
+    expect(r.changes.join(' ')).toContain('Rear delts is at 9 sets');
+  });
+  it('waits until you have 8 weeks in', () => {
+    expect(rulesReport({ ...base, weeksOnProgram: 3, volume }).changes.join(' ')).not.toContain('specialisation');
   });
 });

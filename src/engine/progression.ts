@@ -1,4 +1,4 @@
-import type { LoggedExercise, LoggedSet, ProgressionBasis, TemplateExercise, WorkoutSession } from '../types';
+import type { LoadKind, LoggedExercise, LoggedSet, ProgressionBasis, TemplateExercise, Technique, WorkoutSession } from '../types';
 
 /**
  * Double progression, per exercise.
@@ -64,14 +64,16 @@ export function applySession(
   basis: ProgressionBasis,
 ): { state: ProgressState; outcome: Outcome } {
   if (le.skipped || !le.countsForProgression) return { state: prev, outcome: 'none' };
-  const achieved = achievedReps(le.sets, basis);
+  // Myo-rep match sets 2+ only copy set 1, so set 1 is the performance.
+  const achieved = achievedReps(le.sets, le.technique === 'myo-match' ? 'first' : basis);
   if (achieved === null) return { state: prev, outcome: 'none' };
 
   const { repMin, repMax } = le;
   const target = clamp(le.targetReps, repMin, repMax);
   const weight = le.workingWeight;
   const outcome = evaluate(target, achieved, repMin, repMax);
-  const weightWentUp = prev.sessions > 0 && weight > prev.weight;
+  // On an assisted machine, less assistance is the step up.
+  const weightWentUp = prev.sessions > 0 && (le.kind === 'assisted' ? weight < prev.weight : weight > prev.weight);
 
   const next: ProgressState = {
     weight,
@@ -147,7 +149,7 @@ const defaultFmt: WeightFormatter = kg => `${+kg.toFixed(2)}kg`;
 export function planExercise(
   state: ProgressState,
   te: Pick<TemplateExercise, 'repMin' | 'repMax' | 'startWeight'>,
-  opts: { holdTargets?: boolean; fmt?: WeightFormatter } = {},
+  opts: { holdTargets?: boolean; fmt?: WeightFormatter; kind?: LoadKind } = {},
 ): ExercisePlan {
   const fmt = opts.fmt ?? defaultFmt;
   const { repMin, repMax } = te;
@@ -189,7 +191,7 @@ export function planExercise(
       target: repMax,
       increaseDue: true,
       flagged: false,
-      reason: `You hit ${last.achieved} reps at ${fmt(last.weight)} — the top of your range. Increase the weight today.`,
+      reason: `You hit ${last.achieved} reps at ${fmt(last.weight)} — the top of your range. ${opts.kind === 'assisted' ? 'Drop the assistance today.' : opts.kind === 'bodyweight' ? 'Add weight with the belt today.' : 'Increase the weight today.'}`,
     };
   }
 
@@ -206,8 +208,32 @@ export function planExercise(
 }
 
 /** Target after the user enters a weight for an exercise that was due an increase. */
-export function targetAfterIncrease(newWeight: number, oldWeight: number, repMin: number, repMax: number): number {
-  return newWeight > oldWeight ? repMin : repMax;
+export function targetAfterIncrease(newWeight: number, oldWeight: number, repMin: number, repMax: number, kind: LoadKind = 'weighted'): number {
+  const harder = kind === 'assisted' ? newWeight < oldWeight : newWeight > oldWeight;
+  return harder ? repMin : repMax;
+}
+
+/**
+ * Typical reps lost from set 1 to each later set when training close to failure, learned from the
+ * last few sessions (index 0 is always 0). Defaults to one rep per set until there is history.
+ */
+export function learnDrops(history: LoggedExercise[], sets: number): number[] {
+  const recent = history
+    .map(le => workingSets(le.sets).map(s => s.reps))
+    .filter(r => r.length >= 2)
+    .slice(-3);
+  return Array.from({ length: sets }, (_, k) => {
+    if (k === 0) return 0;
+    const diffs = recent.filter(r => r.length > k).map(r => r[0] - r[k]);
+    if (!diffs.length) return k;
+    const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    return clamp(Math.round(avg), 0, 5);
+  });
+}
+
+/** Per-set rep targets: set 1 is the progression target; later sets expect the usual drop-off. */
+export function setTargets(first: number, drops: number[], sets: number, technique: Technique = 'straight'): number[] {
+  return Array.from({ length: sets }, (_, k) => (technique === 'myo-match' || k === 0 ? first : Math.max(1, first - (drops[k] ?? k))));
 }
 
 /** Epley estimated one-rep max. */

@@ -1,24 +1,34 @@
-import type { Exercise, Muscle } from '../types';
+import type { Exercise, LoadKind, Muscle } from '../types';
 
-type Row = [name: string, primary: Muscle[], secondary?: Muscle[]];
+type Row = [name: string, primary: Muscle[], secondary?: Muscle[], kind?: LoadKind];
 
 const rows: Row[] = [
   // Chest
   ['Bench Press', ['chest'], ['triceps', 'front-delts']],
   ['Incline Bench Press', ['chest'], ['front-delts', 'triceps']],
   ['Incline Dumbbell Press', ['chest'], ['front-delts', 'triceps']],
+  ['Incline DB Press', ['chest'], ['front-delts', 'triceps']],
   ['Dumbbell Bench Press', ['chest'], ['triceps', 'front-delts']],
   ['Machine Chest Press', ['chest'], ['triceps', 'front-delts']],
   ['Incline Machine Press', ['chest'], ['front-delts', 'triceps']],
   ['Pec Deck', ['chest']],
   ['Cable Fly', ['chest']],
-  ['Dips', ['chest', 'triceps'], ['front-delts']],
-  ['Push-ups', ['chest'], ['triceps', 'front-delts']],
+  ['Dips', ['chest', 'triceps'], ['front-delts'], 'bodyweight'],
+  ['Push-ups', ['chest'], ['triceps', 'front-delts'], 'bodyweight'],
+  ['45° Incline Barbell Press', ['chest'], ['front-delts', 'triceps']],
+  ['Decline Cable Fly', ['chest']],
+  ['Chest Dips', ['chest', 'triceps'], ['front-delts'], 'bodyweight'],
   // Back
   ['Lat Pulldown', ['back'], ['biceps']],
   ['Close-Grip Lat Pulldown', ['back'], ['biceps']],
-  ['Pull-ups', ['back'], ['biceps']],
-  ['Chin-ups', ['back'], ['biceps']],
+  ['Pull-ups', ['back'], ['biceps'], 'bodyweight'],
+  ['Chin-ups', ['back'], ['biceps'], 'bodyweight'],
+  ['Wide-Grip Pull-Up', ['back'], ['biceps', 'rear-delts'], 'bodyweight'],
+  ['Assisted Wide-Grip Pull-Up', ['back'], ['biceps', 'rear-delts'], 'assisted'],
+  ['Neutral-Grip Lat Pulldown', ['back'], ['biceps']],
+  ['Single-Arm Cable Pulldown', ['back'], ['biceps']],
+  ['Dual-Handle Seated Cable Row', ['back'], ['biceps', 'rear-delts']],
+  ['Chest-Supported Machine Row', ['back'], ['rear-delts', 'biceps']],
   ['Seated Cable Row', ['back'], ['biceps', 'rear-delts']],
   ['Barbell Row', ['back'], ['biceps', 'rear-delts']],
   ['Dumbbell Row', ['back'], ['biceps', 'rear-delts']],
@@ -38,18 +48,29 @@ const rows: Row[] = [
   ['Rear Delt Fly', ['rear-delts']],
   ['Reverse Pec Deck', ['rear-delts']],
   ['Face Pull', ['rear-delts'], ['traps']],
+  ['1-Arm Cable Rear Delt Flye', ['rear-delts']],
+  ['High-Cable Lateral Raise', ['side-delts']],
+  ['Seated DB Lateral Raise', ['side-delts']],
+  ['Cable Upright Row', ['side-delts'], ['traps']],
+  ['DB Shrug', ['traps']],
   ['Upright Row', ['side-delts'], ['traps']],
   ['Shrugs', ['traps']],
   // Arms
   ['Barbell Curl', ['biceps'], ['forearms']],
   ['Dumbbell Curl', ['biceps'], ['forearms']],
   ['Hammer Curl', ['biceps', 'forearms']],
+  ['Rope Hammer Curl', ['biceps', 'forearms']],
+  ['EZ-Bar Reverse Curl', ['forearms', 'biceps']],
   ['Preacher Curl', ['biceps']],
   ['Cable Curl', ['biceps']],
   ['Incline Dumbbell Curl', ['biceps']],
+  ['Incline DB Curl', ['biceps']],
   ['Tricep Pushdown', ['triceps']],
   ['Overhead Tricep Extension', ['triceps']],
   ['Skull Crushers', ['triceps']],
+  ['EZ-Bar Skull Crusher', ['triceps']],
+  ['Cable Triceps Pushdown', ['triceps']],
+  ['Overhead Cable Triceps Extension', ['triceps']],
   ['Close-Grip Bench Press', ['triceps', 'chest'], ['front-delts']],
   ['Machine Tricep Extension', ['triceps']],
   // Legs
@@ -60,6 +81,9 @@ const rows: Row[] = [
   ['Bulgarian Split Squat', ['quads', 'glutes']],
   ['Walking Lunges', ['quads', 'glutes'], ['hamstrings']],
   ['Romanian Deadlift', ['hamstrings', 'glutes'], ['back']],
+  ['DB RDL', ['hamstrings', 'glutes'], ['back']],
+  ['Back Extension', ['glutes', 'hamstrings'], ['back'], 'bodyweight'],
+  ['DB Bulgarian Split Squat', ['quads', 'glutes']],
   ['Leg Extension', ['quads']],
   ['Lying Leg Curl', ['hamstrings']],
   ['Seated Leg Curl', ['hamstrings']],
@@ -70,16 +94,24 @@ const rows: Row[] = [
   ['Standing Calf Raise', ['calves']],
   ['Seated Calf Raise', ['calves']],
   ['Smith Machine Squat', ['quads', 'glutes']],
+  ['Smith Machine Calf Raise', ['calves']],
+  ['Smith Machine Standing Calf Raise', ['calves']],
   // Core
   ['Cable Crunch', ['abs']],
-  ['Hanging Leg Raise', ['abs']],
-  ['Ab Wheel', ['abs']],
-  ['Plank', ['abs']],
+  ['Hanging Leg Raise', ['abs'], undefined, 'bodyweight'],
+  ['Roman Chair Leg Raise', ['abs'], undefined, 'bodyweight'],
+  ['Ab Wheel', ['abs'], undefined, 'bodyweight'],
+  ['Plank', ['abs'], undefined, 'bodyweight'],
 ];
 
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 
-export const BUILT_IN_EXERCISES: Exercise[] = rows.map(([name, primary, secondary]) => ({ id: slug(name), name, primary, secondary }));
+const GRADUATES: Record<string, string> = { 'assisted-wide-grip-pull-up': 'wide-grip-pull-up' };
+
+export const BUILT_IN_EXERCISES: Exercise[] = rows.map(([name, primary, secondary, kind]) => {
+  const id = slug(name);
+  return { id, name, primary, secondary, kind, graduatesTo: GRADUATES[id] };
+});
 
 export const MUSCLES: { id: Muscle; label: string }[] = [
   { id: 'chest', label: 'Chest' },

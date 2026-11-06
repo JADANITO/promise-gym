@@ -14,7 +14,7 @@ export async function generateReport(): Promise<{ report: CoachReport; warning?:
   const stats = buildWeekStats({
     sessions: s.sessions, templates: s.templates, checkIns: s.checkIns, profile: s.profile, measurements: s.measurements,
     weeklyTargets: s.weeklyTargets, weeklyCheckIns: s.weeklyCheckIns, settings: s.settings, trainingBlock: s.currentPhase(),
-    nutritionPhase: s.currentNutritionPhase(), exercises: s.exercises(), name: s.exerciseName,
+    nutritionPhase: s.currentNutritionPhase(), exercises: s.exercises(), events: s.lifeEvents, name: s.exerciseName,
   }, today);
   const statsSummary = {
     workouts: `${stats.workoutsDone}/${stats.workoutsPlanned}`,

@@ -55,3 +55,10 @@ export function fmtRateW(kgPerWeek: number, units: 'kg' | 'lb'): string {
   const v = units === 'lb' ? kgPerWeek * LB_PER_KG : kgPerWeek;
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}${units}/wk`;
 }
+
+/** Load as the user thinks of it: plain weight, assistance, or bodyweight plus belt. */
+export function fmtLoad(kg: number, kind: 'weighted' | 'assisted' | 'bodyweight' | undefined, units: Units): string {
+  if (kind === 'bodyweight') return kg > 0 ? `BW + ${fmtW(kg, units)}` : 'Bodyweight';
+  if (kind === 'assisted') return kg > 0 ? `${fmtW(kg, units)} assist` : 'Bodyweight';
+  return fmtW(kg, units);
+}

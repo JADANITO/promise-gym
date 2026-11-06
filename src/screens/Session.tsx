@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useStore } from '../data/store';
+import { trackHistory, useStore } from '../data/store';
 import { computeProgress, e1rm, planExercise } from '../engine/progression';
 import { daysBetween, fmtDate, ymd } from '../engine/dates';
 import { returningFromBreak } from '../engine/phases';
-import { fmtDuration, fmtW } from '../format';
-import type { WorkoutSession } from '../types';
+import { fmtDuration, fmtLoad, fmtW } from '../format';
+import type { TemplateExercise, WorkoutSession } from '../types';
 
 /** Decides whether to ask about repeating targets after a break, then starts the workout. */
 export function StartWorkout({ templateId, go }: { templateId: string; go: (r: string) => void }) {
@@ -54,10 +54,13 @@ export function Summary({ id, go }: { id: string; go: (r: string) => void }) {
 
   const template = templates.find(t => t.id === session.templateId);
   const next = session.exercises.filter(e => !e.skipped).map(e => {
-    const te = template?.exercises.find(x => x.exerciseId === e.exerciseId) ?? { repMin: e.repMin, repMax: e.repMax, startWeight: e.workingWeight };
-    const state = computeProgress(e.exerciseId, sessions, settings.basis, te.startWeight, te.repMin);
-    const plan = planExercise(state, te);
-    return { name: name(e.exerciseId), plan };
+    const te: TemplateExercise = template?.exercises.find(x => x.exerciseId === e.exerciseId)
+      ?? { id: e.id, exerciseId: e.exerciseId, sets: e.sets.length, repMin: e.repMin, repMax: e.repMax, restSec: e.restSec, startWeight: e.workingWeight, cable: !!e.station };
+    const track = trackHistory(sessions, te, e.station);
+    const kind = e.kind ?? 'weighted';
+    const state = computeProgress(e.exerciseId, track.sessions.map(x => ({ ...x, exercises: x.exercises.map(le => ({ ...le, kind })) })), settings.basis, te.startWeight, te.repMin);
+    const plan = planExercise(state, te, { kind });
+    return { name: name(e.exerciseId), plan, kind };
   });
 
   return (
@@ -77,7 +80,9 @@ export function Summary({ id, go }: { id: string; go: (r: string) => void }) {
         {next.map(n => (
           <div key={n.name} className="row between" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
             <span className="bold">{n.name}</span>
-            <span className="num">{n.plan.increaseDue ? <span className="pill accent">Increase the weight</span> : `${fmtW(n.plan.weight, u)} × ${n.plan.target}`}</span>
+            <span className="num">{n.plan.increaseDue
+              ? <span className="pill accent">{n.kind === 'assisted' ? 'Less assistance' : n.kind === 'bodyweight' ? 'Add weight' : 'Increase the weight'}</span>
+              : `${fmtLoad(n.plan.weight, n.kind, u)} × ${n.plan.target}`}</span>
           </div>
         ))}
       </div>

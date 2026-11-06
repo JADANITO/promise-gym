@@ -6,6 +6,8 @@ import {
   e1rm,
   planExercise,
   targetAfterIncrease,
+  learnDrops,
+  setTargets,
 } from './progression';
 
 const EX = 'chest-press';
@@ -192,5 +194,42 @@ describe('return-to-training ramp', () => {
   it('climbs two reps at a time during the ramp', () => {
     expect(plan([session(le(35, 10, [10, 10, 10], { ramp: true }))]).target).toBe(12);
     expect(plan([session(le(35, 10, [10, 10, 10]))]).target).toBe(11);
+  });
+});
+
+describe('per-set targets', () => {
+  it('defaults to one rep lost per set', () => {
+    expect(setTargets(10, learnDrops([], 3), 3)).toEqual([10, 9, 8]);
+  });
+  it('learns your real drop-off (9,7,6 pattern → -2, -3)', () => {
+    const hist = [le(60, 8, [9, 7, 6]), le(60, 8, [9, 7, 6])];
+    const drops = learnDrops(hist, 3);
+    expect(drops).toEqual([0, 2, 3]);
+    expect(setTargets(10, drops, 3)).toEqual([10, 8, 7]);
+  });
+  it('myo-rep match: every set matches set 1', () => {
+    expect(setTargets(11, [0, 2, 3], 3, 'myo-match')).toEqual([11, 11, 11]);
+  });
+  it('first-set basis progresses a 9,7,6 lifter (lowest set would call it failed)', () => {
+    const range = { repMin: 6, repMax: 8, startWeight: 60 };
+    const st = computeProgress(EX, [session(le(60, 8, [9, 7, 6], { repMin: 6, repMax: 8 }))], 'first', 60, 6);
+    expect(planExercise(st, range).increaseDue).toBe(true);
+    const lowest = computeProgress(EX, [session(le(60, 8, [9, 7, 6], { repMin: 8, repMax: 10 }))], 'lowest', 60, 8);
+    expect(lowest.failedCount).toBe(1);
+  });
+});
+
+describe('assisted exercises', () => {
+  it('less assistance is the step up', () => {
+    expect(targetAfterIncrease(10, 14, 8, 10, 'assisted')).toBe(8);
+    expect(targetAfterIncrease(14, 14, 8, 10, 'assisted')).toBe(10);
+  });
+  it('records dropping assistance as a weight increase', () => {
+    const h = [session(le(14, 8, [10, 10, 10], { kind: 'assisted' })), session(le(10, 8, [8, 8, 8], { kind: 'assisted' }))];
+    expect(computeProgress(EX, h, 'first', 14, 8).lastIncreaseAt).toBe(h[1].startedAt);
+  });
+  it('tells you to drop the assistance', () => {
+    const st = computeProgress(EX, [session(le(14, 10, [12, 11, 10], { kind: 'assisted' }))], 'first', 14, 10);
+    expect(planExercise(st, TE, { kind: 'assisted' }).reason).toContain('Drop the assistance');
   });
 });

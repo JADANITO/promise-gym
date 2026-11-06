@@ -2,17 +2,18 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { del, get, set } from 'idb-keyval';
 import type {
-  CoachReport, DailyCheckIn, Exercise, LoggedExercise, LoggedSet, Measurement, Muscle, NutritionPhase,
-  NutritionPhaseType, Phase, Photo, Profile, Settings, TemplateExercise, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate,
+  CableStation, CoachReport, DailyCheckIn, Exercise, ExerciseOverride, LifeEvent, LoggedExercise, LoggedSet, Measurement, Muscle,
+  NutritionPhase, NutritionPhaseType, Phase, Photo, Profile, Settings, TemplateExercise, WeeklyCheckIn, WeeklyTarget, WorkoutSession,
+  WorkoutTemplate,
 } from '../types';
-import { computeProgress, planExercise, targetAfterIncrease } from '../engine/progression';
+import { computeProgress, learnDrops, planExercise, setTargets, targetAfterIncrease } from '../engine/progression';
 import { deloadFinished, deloadPrescription, roundTo } from '../engine/phases';
-import { ymd } from '../engine/dates';
-import { plannedPerWeek } from '../engine/schedule';
+import { addDays, daysBetween, parseYmd, weekStart, ymd } from '../engine/dates';
+import { DAY_NAMES, eventOn, plannedFor, plannedPerWeek } from '../engine/schedule';
 import { BUILT_IN_EXERCISES, slug } from './library';
-import { buildStarterProgram } from './program';
+import { PROGRAM_VERSION, buildProgram } from './program';
 import { deletePhotoBlob, savePhotoBlob } from './photos';
-import { fmtW, uid } from '../format';
+import { fmtLoad, uid } from '../format';
 
 export interface ActiveExercise extends LoggedExercise {
   /** Working weight the engine suggested before any edits. */
@@ -21,9 +22,13 @@ export interface ActiveExercise extends LoggedExercise {
   flagged: boolean;
   /** The user has answered the "increase the weight" prompt for this session. */
   increaseHandled?: boolean;
-  /** First time doing this exercise: ask for a starting weight. */
+  /** First time doing this exercise (or on this cable station): ask for a starting weight. */
   firstWeight?: boolean;
   increment?: number;
+  /** Typical reps lost per set, learned from history (index 0 = 0). */
+  drops: number[];
+  /** The template exercise this came from, to rebuild it (e.g. on a station switch). */
+  source: TemplateExercise;
 }
 
 export interface ActiveWorkout {
@@ -41,12 +46,12 @@ export interface RestTimer {
 export const DEFAULT_SETTINGS: Settings = {
   units: 'kg',
   defaultRestSec: 90,
-  basis: 'lowest',
+  basis: 'first',
   minPhaseWeeks: 4,
   deloadWeightPct: 0.875,
   deloadSetFactor: 0.5,
   weightRounding: 2.5,
-  workoutsPerWeek: 4,
+  workoutsPerWeek: 5,
   schedule: [null, null, null, null, null, null, null],
   scheduleOverrides: {},
   lengthUnits: 'in',
@@ -72,6 +77,8 @@ interface Data {
   weeklyTargets: WeeklyTarget[];
   weeklyCheckIns: WeeklyCheckIn[];
   photos: Photo[];
+  lifeEvents: LifeEvent[];
+  exerciseOverrides: ExerciseOverride[];
   reports: CoachReport[];
   settings: Settings;
   active: ActiveWorkout | null;
@@ -79,9 +86,18 @@ interface Data {
   notified: Record<string, string>; // reminder key → date last notified
 }
 
+export interface SwapOption {
+  date: string;
+  templateId: string;
+  templateName: string;
+  te: TemplateExercise;
+  label: string;
+}
+
 interface Actions {
   // library
   exercises: () => Exercise[];
+  exercise: (id: string) => Exercise | undefined;
   exerciseName: (id: string) => string;
   addCustomExercise: (name: string, primary?: Muscle[]) => Exercise;
   // templates
@@ -91,10 +107,15 @@ interface Actions {
   // workout
   startWorkout: (templateId: string, holdTargets: boolean) => void;
   updateActive: (fn: (a: ActiveWorkout) => void) => void;
+  completeSet: (exId: string, setId: string) => boolean;
+  retarget: (exId: string) => void;
   setIncreaseWeight: (exId: string, kg: number) => void;
   applyWeight: (exId: string, kg: number, mode: 'working' | 'today') => void;
+  setStation: (exId: string, station: CableStation) => void;
   addExerciseToActive: (exerciseId: string, kg: number) => void;
   swapExercise: (exId: string, exerciseId: string) => void;
+  swapOptions: () => SwapOption[];
+  swapAcrossWeek: (exId: string, option: SwapOption) => void;
   finishWorkout: (opts: { saveToTemplate: boolean }) => WorkoutSession | null;
   discardWorkout: () => void;
   deleteSession: (id: string) => void;
@@ -120,10 +141,13 @@ interface Actions {
   completeWeeklyCheckIn: (c: WeeklyCheckIn) => void;
   addPhoto: (blob: Blob, pose: Photo['pose'], date: string) => Promise<Photo>;
   deletePhoto: (id: string) => Promise<void>;
-  // schedule
-  loadStarterProgram: () => void;
+  // schedule & life
+  loadProgram: () => void;
   setScheduleDay: (dow: number, templateId: string | null) => void;
   setOverride: (date: string, templateId: string | null | undefined) => void;
+  addLifeEvent: (e: Omit<LifeEvent, 'id'>, opts?: { moveToday?: boolean }) => string | null;
+  endLifeEvent: (id: string) => void;
+  eventToday: () => LifeEvent | undefined;
   // misc
   setSettings: (s: Partial<Settings>) => void;
   addReport: (r: CoachReport) => void;
@@ -147,6 +171,8 @@ const initialData: Data = {
   weeklyTargets: [],
   weeklyCheckIns: [],
   photos: [],
+  lifeEvents: [],
+  exerciseOverrides: [],
   reports: [],
   settings: DEFAULT_SETTINGS,
   active: null,
@@ -160,20 +186,50 @@ const idbStorage: StateStorage = {
   removeItem: async name => del(name),
 };
 
-function makeSets(count: number, weight: number, target: number, warmups = 0, rounding = 2.5): LoggedSet[] {
+const LOWER_BODY: Muscle[] = ['quads', 'hamstrings', 'glutes', 'calves'];
+
+function makeSets(targets: number[], weight: number, warmups = 0, rounding = 2.5): LoggedSet[] {
   const warm: LoggedSet[] = Array.from({ length: warmups }, () => ({
-    id: uid(), weight: roundTo(weight * 0.5, rounding), targetReps: target, reps: target, completed: false, warmup: true,
+    id: uid(), weight: roundTo(weight * 0.5, rounding), targetReps: targets[0], reps: targets[0], completed: false, warmup: true,
   }));
-  const work: LoggedSet[] = Array.from({ length: count }, () => ({
-    id: uid(), weight, targetReps: target, reps: target, completed: false, warmup: false,
-  }));
+  const work: LoggedSet[] = targets.map(t => ({ id: uid(), weight, targetReps: t, reps: t, completed: false, warmup: false }));
   return [...warm, ...work];
 }
 
 function toLogged(e: ActiveExercise): LoggedExercise {
-  const { baseWeight: _b, reason: _r, flagged: _f, increaseHandled: _h, firstWeight: _fw, increment: _i, ...rest } = e;
+  const { baseWeight: _b, reason: _r, flagged: _f, increaseHandled: _h, firstWeight: _fw, increment: _i, drops: _d, source: _s, ...rest } = e;
   const anyDone = rest.sets.some(s => s.completed && !s.warmup);
   return { ...rest, skipped: rest.skipped || !anyDone };
+}
+
+/**
+ * The history that counts for one exercise: same exercise and cable station, preferring sessions in the
+ * same rep range (so an exercise done 8–10 on one day and 10–12 on another keeps two tracks).
+ * Falls back to the pre-app log (seed) when there's no real history yet.
+ */
+export function trackHistory(sessions: WorkoutSession[], te: TemplateExercise, station?: CableStation): { sessions: WorkoutSession[]; real: boolean } {
+  const match = (le: LoggedExercise) => le.exerciseId === te.exerciseId && (!te.cable || (le.station ?? 'small') === station);
+  const filtered = sessions
+    .filter(s => !s.deload)
+    .map(s => ({ ...s, exercises: s.exercises.filter(match) }))
+    .filter(s => s.exercises.length)
+    .sort((a, b) => a.startedAt - b.startedAt);
+  const sameRange = filtered
+    .map(s => ({ ...s, exercises: s.exercises.filter(le => le.repMin === te.repMin && le.repMax === te.repMax) }))
+    .filter(s => s.exercises.length);
+  const use = sameRange.length ? sameRange : filtered;
+  if (use.length) return { sessions: use, real: true };
+  const defaultStation = te.station ?? 'small';
+  if (te.seed && (!te.cable || station === defaultStation)) {
+    const seedLe: LoggedExercise = {
+      id: 'seed', exerciseId: te.exerciseId, repMin: te.repMin, repMax: te.repMax, restSec: te.restSec,
+      workingWeight: te.seed.weight, targetReps: te.repMin, increasePrompted: false, countsForProgression: true, skipped: false,
+      technique: te.technique, station, kind: undefined,
+      sets: te.seed.reps.map((r, i) => ({ id: `seed${i}`, weight: te.seed!.weight, targetReps: te.repMin, reps: r, completed: true, warmup: false })),
+    };
+    return { sessions: [{ id: 'seed', templateId: '', templateName: 'Before the app', startedAt: 0, phaseId: '', deload: false, exercises: [seedLe] }], real: false };
+  }
+  return { sessions: [], real: false };
 }
 
 export const useStore = create<Store>()(
@@ -186,26 +242,47 @@ export const useStore = create<Store>()(
           return copy;
         });
 
-      const buildExercise = (te: Pick<TemplateExercise, 'exerciseId' | 'sets' | 'repMin' | 'repMax' | 'restSec' | 'startWeight' | 'machineNote' | 'warmupSets' | 'increment'>, holdTargets: boolean, deload: boolean): ActiveExercise => {
+      const buildExercise = (te: TemplateExercise, holdTargets: boolean, deload: boolean, opts: { station?: CableStation; swappedFrom?: string } = {}): ActiveExercise => {
         const { sessions, settings } = getState();
-        const state = computeProgress(te.exerciseId, sessions, settings.basis, te.startWeight, te.repMin);
-        const plan = planExercise(state, te, { holdTargets, fmt: kg => fmtW(kg, settings.units) });
+        const ex = getState().exercise(te.exerciseId);
+        const kind = ex?.kind ?? 'weighted';
+        const technique = te.technique ?? 'straight';
+        const station = te.cable ? opts.station ?? te.station ?? 'small' : undefined;
+        const track = trackHistory(sessions, te, station);
+        const offDefaultStation = !!te.cable && station !== (te.station ?? 'small');
+        const startWeight = offDefaultStation ? 0 : te.startWeight;
+        const state = computeProgress(te.exerciseId, track.sessions.map(s => ({ ...s, exercises: s.exercises.map(le => ({ ...le, kind })) })), settings.basis, startWeight, te.repMin);
+        const fmt = (kg: number) => fmtLoad(kg, kind, settings.units);
+        const plan = planExercise(state, { ...te, startWeight }, { holdTargets, fmt, kind });
         let weight = plan.weight, target = plan.target, sets = te.sets, reason = plan.reason, increaseDue = plan.increaseDue;
         const ramp = !!settings.rampUntil && ymd() <= settings.rampUntil;
-        const firstWeight = !state.last && !te.startWeight;
+        const firstWeight = !state.last && !startWeight && kind !== 'bodyweight';
         if (firstWeight) {
           increaseDue = true;
-          reason = ramp
-            ? `First session back: pick a weight you could do for ~3 more reps than ${target}. Muscle memory will move it up fast.`
-            : `First time: pick a weight you could do for ~2 more reps than ${target}.`;
+          reason = offDefaultStation
+            ? `First time on the ${station} cable — its numbers differ. Pick a weight you could do for ~2 more reps than ${target}.`
+            : ramp
+              ? `First session back: pick a weight you could do for ~3 more reps than ${target}. Muscle memory will move it up fast.`
+              : `First time: pick a weight you could do for ~2 more reps than ${target}.`;
         } else if (ramp && !deload) {
           reason += ' Ramp-up: beat the target and you jump 2 reps next time.';
         }
+        // First leg sessions after time off: fewer sets, short of failure, to keep soreness manageable.
+        if (ramp && !deload && !track.real && ex?.primary?.some(m => LOWER_BODY.includes(m))) {
+          sets = Math.min(sets, 2);
+          reason += ' First leg session back: 2 sets, stop 2–3 reps short of failure to limit soreness.';
+        }
+        if (technique === 'myo-match') reason += ' Myo-rep match: set 1 to failure, then match it on the other sets with short rest-pauses.';
         if (deload) {
           const d = deloadPrescription(plan.weight, te.sets, settings);
-          weight = d.weight; sets = d.sets; target = te.repMin; increaseDue = false;
-          reason = `Deload: ${Math.round(settings.deloadWeightPct * 100)}% weight, ${sets} sets. Leave plenty in the tank — this week doesn't change your progression.`;
+          // Easier means less load — or, on an assisted machine, more assistance.
+          weight = kind === 'bodyweight' ? 0 : kind === 'assisted' ? roundTo(Math.max(plan.weight * 1.3, plan.weight + 5), settings.weightRounding) : d.weight;
+          sets = d.sets; target = te.repMin; increaseDue = false;
+          reason = `Deload: lighter weight, ${sets} sets. Leave plenty in the tank — this week doesn't change your progression.`;
         }
+        if (opts.swappedFrom) reason = `Swapped in from ${opts.swappedFrom}. ${reason}`;
+        const drops = learnDrops(track.sessions.flatMap(s => s.exercises), sets);
+        const targets = setTargets(target, drops, sets, technique);
         return {
           id: uid(),
           exerciseId: te.exerciseId,
@@ -219,20 +296,40 @@ export const useStore = create<Store>()(
           countsForProgression: true,
           skipped: false,
           ramp: ramp && !deload ? true : undefined,
-          sets: makeSets(sets, weight, target, te.warmupSets ?? 0, settings.weightRounding),
+          technique: te.technique,
+          station,
+          kind,
+          swappedFrom: opts.swappedFrom,
+          sets: makeSets(targets, weight, te.warmupSets ?? 0, settings.weightRounding),
           baseWeight: weight,
           reason,
           flagged: plan.flagged,
           firstWeight: firstWeight || undefined,
           increment: te.increment,
+          drops,
+          source: te,
         };
+      };
+
+      /** Re-aim sets 2+ once set 1 is done: myo-match copies it, straight sets expect the usual drop. */
+      const retargetIn = (e: ActiveExercise) => {
+        const working = e.sets.filter(s => !s.warmup);
+        const first = working[0];
+        const base = first?.completed ? first.reps : e.targetReps;
+        const targets = setTargets(base, e.drops, working.length, e.technique ?? 'straight');
+        working.forEach((s, i) => {
+          if (i === 0 || s.completed) return;
+          s.targetReps = targets[i] ?? targets[targets.length - 1];
+          s.reps = s.targetReps;
+        });
       };
 
       return {
         ...initialData,
 
         exercises: () => [...BUILT_IN_EXERCISES, ...getState().customExercises].sort((a, b) => a.name.localeCompare(b.name)),
-        exerciseName: id => getState().exercises().find(e => e.id === id)?.name ?? id,
+        exercise: id => BUILT_IN_EXERCISES.find(e => e.id === id) ?? getState().customExercises.find(e => e.id === id),
+        exerciseName: id => getState().exercise(id)?.name ?? id,
         addCustomExercise: (name, primary) => {
           const existing = getState().exercises().find(e => e.name.toLowerCase() === name.trim().toLowerCase());
           if (existing) return existing;
@@ -257,6 +354,8 @@ export const useStore = create<Store>()(
           if (!t) return;
           const phase = s.currentPhase();
           const deload = phase?.type === 'deload';
+          const today = ymd();
+          const overrides = s.exerciseOverrides.filter(o => o.date === today && o.templateId === t.id);
           setState({
             active: {
               holdTargets,
@@ -267,7 +366,10 @@ export const useStore = create<Store>()(
                 startedAt: Date.now(),
                 phaseId: phase?.id ?? '',
                 deload,
-                exercises: t.exercises.map(te => buildExercise(te, holdTargets, deload)),
+                exercises: t.exercises.map(te => {
+                  const o = overrides.find(x => x.replaceTeId === te.id);
+                  return o ? buildExercise(o.withTe, holdTargets, deload, { swappedFrom: o.fromLabel }) : buildExercise(te, holdTargets, deload);
+                }),
               },
             },
             timer: null,
@@ -276,24 +378,46 @@ export const useStore = create<Store>()(
 
         updateActive: fn => mutate(d => { if (d.active) fn(d.active); }),
 
+        completeSet: (exId, setId) => {
+          let nowDone = false;
+          mutate(d => {
+            const e = d.active?.session.exercises.find(x => x.id === exId);
+            const s = e?.sets.find(x => x.id === setId);
+            if (!e || !s) return;
+            s.completed = !s.completed;
+            nowDone = s.completed;
+            if (!s.warmup && e.sets.filter(x => !x.warmup)[0]?.id === setId) retargetIn(e);
+          });
+          return nowDone;
+        },
+        retarget: exId => mutate(d => {
+          const e = d.active?.session.exercises.find(x => x.id === exId);
+          if (e) retargetIn(e);
+        }),
+
         setIncreaseWeight: (exId, kg) => mutate(d => {
           const e = d.active?.session.exercises.find(x => x.id === exId);
           if (!e) return;
           e.increaseHandled = true;
-          const target = targetAfterIncrease(kg, e.baseWeight, e.repMin, e.repMax);
+          const kind = e.kind ?? 'weighted';
+          const target = targetAfterIncrease(kg, e.baseWeight, e.repMin, e.repMax, kind);
+          const harder = kind === 'assisted' ? kg < e.baseWeight : kg > e.baseWeight;
+          const label = fmtLoad(kg, kind, d.settings.units);
           e.workingWeight = kg;
           e.targetReps = target;
           e.countsForProgression = true;
           e.reason = e.firstWeight
-            ? `Starting at ${fmtW(kg, d.settings.units)} — aim for ${target} reps on every set, with 2–3 left in the tank.`
-            : kg > e.baseWeight
-              ? `New weight ${fmtW(kg, d.settings.units)} — back to the bottom of the range: ${target} reps.`
-              : `Same weight — aim for ${target} reps again.`;
+            ? `Starting at ${label} — aim for ${target} reps on set 1, with 2–3 left in the tank.`
+            : harder
+              ? `${kind === 'assisted' ? 'Less assistance' : 'New weight'}: ${label} — back to the bottom of the range: ${target} reps.`
+              : `Same load — aim for ${target} reps again.`;
+          const targets = setTargets(target, e.drops, e.sets.filter(s => !s.warmup).length, e.technique ?? 'straight');
+          let i = 0;
           for (const s of e.sets) {
             if (s.warmup) { if (!s.completed) s.weight = roundTo(kg * 0.5, d.settings.weightRounding); continue; }
             s.weight = kg;
-            s.targetReps = target;
-            if (!s.completed) s.reps = target;
+            s.targetReps = targets[i++] ?? target;
+            if (!s.completed) s.reps = s.targetReps;
           }
         }),
 
@@ -301,11 +425,22 @@ export const useStore = create<Store>()(
           const e0 = getState().active?.session.exercises.find(x => x.id === exId);
           if (e0?.increasePrompted && !e0.increaseHandled && mode === 'working') return getState().setIncreaseWeight(exId, kg);
           mutate(d => {
-          const e = d.active?.session.exercises.find(x => x.id === exId);
-          if (!e) return;
-          e.workingWeight = kg;
-          e.countsForProgression = mode === 'working' || kg === e.baseWeight;
-          for (const s of e.sets) if (!s.warmup) s.weight = kg;
+            const e = d.active?.session.exercises.find(x => x.id === exId);
+            if (!e) return;
+            e.workingWeight = kg;
+            e.countsForProgression = mode === 'working' || kg === e.baseWeight;
+            for (const s of e.sets) if (!s.warmup) s.weight = kg;
+          });
+        },
+
+        setStation: (exId, station) => {
+          const { active } = getState();
+          const cur = active?.session.exercises.find(x => x.id === exId);
+          if (!active || !cur || cur.station === station) return;
+          const rebuilt = buildExercise(cur.source, active.holdTargets, active.session.deload, { station, swappedFrom: cur.swappedFrom });
+          mutate(d => {
+            const list = d.active!.session.exercises;
+            list[list.findIndex(x => x.id === exId)] = { ...rebuilt, id: cur.id };
           });
         },
 
@@ -313,8 +448,8 @@ export const useStore = create<Store>()(
           const { settings, templates, active } = getState();
           if (!active) return;
           const fromTemplate = templates.flatMap(t => t.exercises).find(x => x.exerciseId === exerciseId);
-          const te = fromTemplate ?? { exerciseId, sets: 3, repMin: 8, repMax: 12, restSec: settings.defaultRestSec, startWeight: kg };
-          const ex = buildExercise({ ...te, startWeight: fromTemplate?.startWeight ?? kg }, active.holdTargets, active.session.deload);
+          const te: TemplateExercise = fromTemplate ?? { id: uid(), exerciseId, sets: 3, repMin: 8, repMax: 12, restSec: settings.defaultRestSec, startWeight: kg };
+          const ex = buildExercise({ ...te, startWeight: fromTemplate?.startWeight || kg }, active.holdTargets, active.session.deload);
           mutate(d => { d.active!.session.exercises.push(ex); });
         },
 
@@ -323,12 +458,49 @@ export const useStore = create<Store>()(
           const cur = active?.session.exercises.find(x => x.id === exId);
           if (!active || !cur) return;
           const ex = buildExercise(
-            { exerciseId, sets: cur.sets.filter(s => !s.warmup).length, repMin: cur.repMin, repMax: cur.repMax, restSec: cur.restSec, startWeight: cur.workingWeight },
+            { id: uid(), exerciseId, sets: cur.sets.filter(s => !s.warmup).length, repMin: cur.repMin, repMax: cur.repMax, restSec: cur.restSec, startWeight: 0 },
             active.holdTargets, false,
           );
           mutate(d => {
             const list = d.active!.session.exercises;
             list[list.findIndex(x => x.id === exId)] = { ...ex, sets: active.session.deload ? cur.sets.map(s => ({ ...s, id: uid() })) : ex.sets };
+          });
+        },
+
+        swapOptions: () => {
+          const s = getState();
+          if (!s.active) return [];
+          const today = ymd();
+          const sunday = addDays(weekStart(today), 6);
+          const inToday = new Set(s.active.session.exercises.map(e => e.exerciseId));
+          const out: SwapOption[] = [];
+          for (let d = addDays(today, 1); d <= sunday; d = addDays(d, 1)) {
+            const tid = plannedFor(s.settings, d, s.lifeEvents);
+            const t = s.templates.find(x => x.id === tid);
+            if (!t) continue;
+            const taken = new Set(s.exerciseOverrides.filter(o => o.date === d && o.templateId === t.id).map(o => o.replaceTeId));
+            for (const te of t.exercises) {
+              if (taken.has(te.id) || inToday.has(te.exerciseId)) continue;
+              out.push({ date: d, templateId: t.id, templateName: t.name, te, label: `${t.name} (${DAY_NAMES[parseYmd(d).getDay()]})` });
+            }
+          }
+          return out;
+        },
+
+        swapAcrossWeek: (exId, option) => {
+          const { active } = getState();
+          const cur = active?.session.exercises.find(x => x.id === exId);
+          if (!active || !cur) return;
+          const todayLabel = `${active.session.templateName} (${DAY_NAMES[new Date().getDay()]})`;
+          const incoming = buildExercise(option.te, active.holdTargets, active.session.deload, { swappedFrom: option.label });
+          mutate(d => {
+            const list = d.active!.session.exercises;
+            list[list.findIndex(x => x.id === exId)] = incoming;
+            // The exercise you couldn't do today moves into that day's workout, this week only.
+            d.exerciseOverrides = [
+              ...d.exerciseOverrides.filter(o => o.date >= addDays(ymd(), -7)),
+              { date: option.date, templateId: option.templateId, replaceTeId: option.te.id, withTe: cur.source, fromLabel: todayLabel },
+            ];
           });
         },
 
@@ -342,26 +514,37 @@ export const useStore = create<Store>()(
             exercises,
             partial: exercises.some(e => e.skipped || e.sets.some(s => !s.completed && !s.warmup)),
           };
+          const graduations = exercises
+            .filter(le => le.kind === 'assisted' && !le.skipped && le.workingWeight <= 0 && le.countsForProgression)
+            .map(le => ({ from: le.exerciseId, to: getState().exercise(le.exerciseId)?.graduatesTo, reps: le.sets.filter(s => s.completed && !s.warmup).map(s => s.reps) }))
+            .filter((g): g is { from: string; to: string; reps: number[] } => !!g.to);
           mutate(d => {
             d.sessions.push(session);
             d.active = null;
             d.timer = null;
+            // Zero assistance: it's a real pull-up now. Every template switches to the bodyweight version.
+            for (const g of graduations) {
+              for (const t of d.templates) for (const te of t.exercises) {
+                if (te.exerciseId !== g.from) continue;
+                te.exerciseId = g.to;
+                te.startWeight = 0;
+                te.seed = { weight: 0, reps: g.reps };
+                te.increment = 2.5;
+                te.machineNote = `Unassisted since ${ymd()} 💪 Belt on once set 1 hits ${te.repMax}.`;
+              }
+            }
             if (saveToTemplate && !session.deload) {
               const t = d.templates.find(x => x.id === session.templateId);
               if (t) {
-                t.exercises = session.exercises.map(le => {
-                  const old = t.exercises.find(x => x.exerciseId === le.exerciseId);
+                t.exercises = active.session.exercises.filter(e => !e.swappedFrom).map(ae => {
+                  const le = toLogged(ae);
                   return {
-                    id: old?.id ?? uid(),
+                    ...ae.source,
+                    id: ae.source.id ?? uid(),
                     exerciseId: le.exerciseId,
                     sets: le.sets.filter(s => !s.warmup).length,
                     warmupSets: le.sets.filter(s => s.warmup).length,
-                    repMin: le.repMin,
-                    repMax: le.repMax,
                     restSec: le.restSec,
-                    startWeight: old?.startWeight ?? le.workingWeight,
-                    machineNote: le.machineNote,
-                    increment: old?.increment,
                   };
                 });
               }
@@ -447,11 +630,18 @@ export const useStore = create<Store>()(
           mutate(d => { d.photos = d.photos.filter(p => p.id !== id); });
         },
 
-        loadStarterProgram: () => mutate(d => {
-          const { templates, schedule } = buildStarterProgram();
+        loadProgram: () => mutate(d => {
+          const { templates, schedule } = buildProgram();
+          // Old workouts are archived, not deleted, so their history and charts stay.
+          d.templates.forEach(t => { t.archived = true; });
           d.templates.push(...templates);
           d.settings.schedule = schedule;
+          d.settings.scheduleOverrides = {};
           d.settings.workoutsPerWeek = plannedPerWeek(schedule);
+          d.settings.basis = 'first';
+          d.settings.programVersion = PROGRAM_VERSION;
+          d.settings.programLoadedOn = ymd();
+          d.exerciseOverrides = [];
         }),
         setScheduleDay: (dow, templateId) => mutate(d => {
           d.settings.schedule[dow] = templateId;
@@ -461,6 +651,42 @@ export const useStore = create<Store>()(
           if (templateId === undefined) delete d.settings.scheduleOverrides[date];
           else d.settings.scheduleOverrides[date] = templateId;
         }),
+
+        addLifeEvent: (e, opts = {}) => {
+          const s = getState();
+          const today = ymd();
+          let movedTo: string | null = null;
+          const todayPlan = plannedFor(s.settings, today, s.lifeEvents);
+          if (opts.moveToday && todayPlan && e.from <= today && today <= e.to) {
+            // Next free rest day this week after the time off.
+            const sunday = addDays(weekStart(today), 6);
+            for (let d = addDays(e.to, 1); d <= sunday; d = addDays(d, 1)) {
+              if (!plannedFor(s.settings, d, s.lifeEvents) && !eventOn(s.lifeEvents, d)) { movedTo = d; break; }
+            }
+          }
+          const length = daysBetween(e.from, e.to) + 1;
+          mutate(d => {
+            d.lifeEvents.push({ ...e, id: uid() });
+            if (movedTo) d.settings.scheduleOverrides[movedTo] = todayPlan;
+            // Longer illness or time away: timelines move by the time lost, and training ramps back in.
+            if ((e.type === 'ill' || e.type === 'away') && length >= 3) {
+              const shift = (date: string) => addDays(date, length);
+              d.nutritionPhases.forEach(p => { if (p.status === 'active') p.startDate = shift(p.startDate); });
+              d.phases.forEach(p => { if (p.status === 'active') p.startDate = shift(p.startDate); });
+              if (length >= 14) d.settings.rampUntil = addDays(e.to, 21);
+            }
+          });
+          return movedTo;
+        },
+        endLifeEvent: id => mutate(d => {
+          const today = ymd();
+          const e = d.lifeEvents.find(x => x.id === id);
+          if (!e) return;
+          if (e.from >= today) d.lifeEvents = d.lifeEvents.filter(x => x.id !== id);
+          else e.to = addDays(today, -1);
+        }),
+        eventToday: () => eventOn(getState().lifeEvents, ymd()),
+
         setSettings: s => mutate(d => {
           d.settings = { ...d.settings, ...s };
           if (s.minPhaseWeeks) d.phases.forEach(p => { if (p.status === 'active' && p.type === 'gaining') p.minWeeks = s.minPhaseWeeks!; });
@@ -470,7 +696,7 @@ export const useStore = create<Store>()(
 
         exportData: () => {
           const d = pickData(getState());
-          return JSON.stringify({ app: 'promise', version: 2, exportedAt: new Date().toISOString(), data: { ...d, active: null, timer: null, settings: { ...d.settings, anthropicKey: undefined, gistToken: undefined } } }, null, 2);
+          return JSON.stringify({ app: 'promise', version: 3, exportedAt: new Date().toISOString(), data: { ...d, active: null, timer: null, settings: { ...d.settings, anthropicKey: undefined, gistToken: undefined } } }, null, 2);
         },
         importData: json => {
           const parsed = JSON.parse(json);
@@ -495,7 +721,13 @@ export const useStore = create<Store>()(
       partialize: s => pickData(s),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<Data>;
-        return { ...current, ...p, profile: { ...initialData.profile, ...p.profile }, settings: { ...DEFAULT_SETTINGS, ...p.settings } };
+        return {
+          ...current, ...p,
+          lifeEvents: p.lifeEvents ?? [],
+          exerciseOverrides: p.exerciseOverrides ?? [],
+          profile: { ...initialData.profile, ...p.profile },
+          settings: { ...DEFAULT_SETTINGS, ...p.settings },
+        };
       },
     },
   ),
@@ -514,6 +746,8 @@ function pickData(s: Data): Data {
     weeklyTargets: s.weeklyTargets,
     weeklyCheckIns: s.weeklyCheckIns,
     photos: s.photos,
+    lifeEvents: s.lifeEvents,
+    exerciseOverrides: s.exerciseOverrides,
     reports: s.reports,
     settings: s.settings,
     active: s.active,

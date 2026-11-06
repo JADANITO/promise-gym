@@ -131,7 +131,7 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
             </select>
           </div>
         ))}
-        <button className="btn" onClick={() => { if (confirm('Add the PT program (Upper/Lower/Pull/Legs/Push) and set it as your split?')) { s.loadStarterProgram(); setMsg('PT program loaded ✓'); } }}>Load PT program</button>
+        <button className="btn" onClick={() => { if (confirm('Load your program (Upper, Lower, Pull, Push, Legs) as your split? Current workouts are archived, history is kept.')) { s.loadProgram(); setMsg('PT program loaded ✓'); } }}>Load my program</button>
         <p className="tiny muted">Move a single session from the week strip on Home — it won't change this.</p>
       </div>
 

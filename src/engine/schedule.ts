@@ -1,10 +1,16 @@
-import type { DailyCheckIn, Exercise, Muscle, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession } from '../types';
+import type { DailyCheckIn, Exercise, LifeEvent, Muscle, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession } from '../types';
 import { addDays, parseYmd, weekStart, ymd } from './dates';
 
 export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-/** Template planned for a date (null = rest). One-off overrides win over the weekly split. */
-export function plannedFor(settings: Pick<Settings, 'schedule' | 'scheduleOverrides'>, date: string): string | null {
+/** The life event (ill, away, sore…) covering a date, if any. */
+export function eventOn(events: LifeEvent[] | undefined, date: string): LifeEvent | undefined {
+  return events?.find(e => e.from <= date && date <= e.to);
+}
+
+/** Template planned for a date (null = rest). Days off win, then one-off overrides, then the weekly split. */
+export function plannedFor(settings: Pick<Settings, 'schedule' | 'scheduleOverrides'>, date: string, events?: LifeEvent[]): string | null {
+  if (eventOn(events, date)) return null;
   if (date in settings.scheduleOverrides) return settings.scheduleOverrides[date];
   return settings.schedule[parseYmd(date).getDay()] ?? null;
 }
@@ -13,23 +19,26 @@ export interface PlanDay {
   date: string;
   planned: string | null;
   sessions: WorkoutSession[];
-  status: 'done' | 'missed' | 'today' | 'upcoming' | 'rest' | 'extra';
+  status: 'done' | 'missed' | 'today' | 'upcoming' | 'rest' | 'extra' | 'off';
+  event?: LifeEvent;
 }
 
 /** Monday–Sunday for the week containing `today`. */
-export function weekPlan(settings: Pick<Settings, 'schedule' | 'scheduleOverrides'>, sessions: WorkoutSession[], today: string): PlanDay[] {
+export function weekPlan(settings: Pick<Settings, 'schedule' | 'scheduleOverrides'>, sessions: WorkoutSession[], today: string, events?: LifeEvent[]): PlanDay[] {
   const mon = weekStart(today);
   return Array.from({ length: 7 }, (_, i) => {
     const date = addDays(mon, i);
-    const planned = plannedFor(settings, date);
+    const planned = plannedFor(settings, date, events);
+    const event = eventOn(events, date);
     const done = sessions.filter(s => ymd(s.startedAt) === date);
     let status: PlanDay['status'];
     if (done.length) status = planned ? 'done' : 'extra';
+    else if (event) status = 'off';
     else if (!planned) status = 'rest';
     else if (date < today) status = 'missed';
     else if (date === today) status = 'today';
     else status = 'upcoming';
-    return { date, planned, sessions: done, status };
+    return { date, planned, sessions: done, status, event };
   });
 }
 
@@ -78,11 +87,13 @@ export function promisesFor(input: {
   target?: WeeklyTarget;
   today: string;
   weekOf: string;
+  events?: LifeEvent[];
 }): Promises {
-  const { settings, sessions, checkIns, weekly, target, today, weekOf } = input;
+  const { settings, sessions, checkIns, weekly, target, today, weekOf, events } = input;
   const mon = weekStart(weekOf);
-  const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i)).filter(d => d <= today);
-  const plan = weekPlan(settings, sessions, mon).filter(d => d.date <= today);
+  // Days off (ill, away) aren't promises you could keep.
+  const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i)).filter(d => d <= today && !(eventOn(events, d) && eventOn(events, d)!.type !== 'sore'));
+  const plan = weekPlan(settings, sessions, mon, events).filter(d => d.date <= today);
   const trainingDue = plan.filter(d => d.planned && (d.date < today || d.status === 'done')).length;
   const trainingDone = Math.min(trainingDue, plan.filter(d => d.sessions.length > 0).length);
   const weighDue = days.length;

@@ -1,9 +1,9 @@
-import type { CoachReport, DailyCheckIn, Exercise, Measurement, NutritionPhase, Phase, Profile, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate } from '../types';
+import type { CoachReport, DailyCheckIn, Exercise, LifeEvent, Measurement, NutritionPhase, Phase, Profile, Settings, WeeklyCheckIn, WeeklyTarget, WorkoutSession, WorkoutTemplate } from '../types';
 import { achievedReps, computeProgress } from './progression';
 import { analyzePlateau, phaseWeek, plateauCheckDue } from './phases';
 import { addDays, daysBetween, weekStart, ymd } from './dates';
 import { mean } from './stats';
-import { composition, phaseStatus, targetFor } from './body';
+import { composition, excludeDisrupted, phaseStatus, targetFor } from './body';
 import { promisesFor, setsPerMuscle, volumeRange } from './schedule';
 import { TRACKED_MUSCLES, muscleLabel } from '../data/library';
 
@@ -19,6 +19,7 @@ export interface CoachInput {
   trainingBlock?: Phase;
   nutritionPhase?: NutritionPhase;
   exercises: Exercise[];
+  events?: LifeEvent[];
   name: (id: string) => string;
 }
 
@@ -39,6 +40,10 @@ export interface WeekStats {
   recovery: { avgSleepHours: number | null; nightsLogged: number; nightsUnder6h: number };
   volume: { muscle: string; sets: number; range: [number, number] }[];
   promisesKept: { kept: number; total: number };
+  /** Illness or time away overlapping this week, e.g. "Ill 3 days". */
+  disruptions: string[];
+  /** Full weeks on the current program. */
+  weeksOnProgram: number;
   notes: string[];
 }
 
@@ -49,6 +54,13 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
   const week = sessions.filter(s => inWeek(s.startedAt));
   const before = sessions.filter(s => ymd(s.startedAt) < from);
   const ci = Object.values(checkIns);
+  const ciTrend = excludeDisrupted(ci, input.events);
+  const disruptions = (input.events ?? [])
+    .filter(e => e.to >= from && e.from <= today && e.type !== 'sore')
+    .map(e => {
+      const days = Math.min(daysBetween(e.from, e.to), daysBetween(e.from, today)) + 1;
+      return `${e.type === 'ill' ? 'Ill' : e.type === 'away' ? 'Away' : 'Off'} ${days} day${days > 1 ? 's' : ''}`;
+    });
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
 
   const ids = new Set<string>();
@@ -79,15 +91,15 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
     });
   }
 
-  const comp = composition(profile, ci, input.measurements, today);
+  const comp = composition(profile, ciTrend, input.measurements, today);
   const target = targetFor(input.weeklyTargets, today) ?? null;
-  const ps = nutritionPhase ? phaseStatus(nutritionPhase, ci, today) : null;
+  const ps = nutritionPhase ? phaseStatus(nutritionPhase, ciTrend, today) : null;
   const lastWaist = [...input.measurements].sort((a, b) => b.date.localeCompare(a.date))[0];
   const kc = days.map(d => checkIns[d]?.calories).filter((v): v is number => v != null);
   const pr = days.map(d => checkIns[d]?.protein).filter((v): v is number => v != null);
   const sleep = days.map(d => checkIns[d]?.sleepHours).filter((v): v is number => v != null);
   const vol = setsPerMuscle(sessions, input.exercises, from, today);
-  const promises = promisesFor({ settings, sessions, checkIns, weekly: input.weeklyCheckIns, target: target ?? undefined, today, weekOf: weekStart(today) });
+  const promises = promisesFor({ settings, sessions, checkIns, weekly: input.weeklyCheckIns, target: target ?? undefined, today, weekOf: weekStart(today), events: input.events });
   const r1 = (n: number | null | undefined) => (n == null ? null : Math.round(n * 10) / 10);
   const notes = [
     ...week.flatMap(s => s.exercises.flatMap(e => e.sets.filter(x => x.note).map(x => `${name(e.exerciseId)}: ${x.note}`))),
@@ -123,6 +135,8 @@ export function buildWeekStats(input: CoachInput, today: string): WeekStats {
     recovery: { avgSleepHours: r1(mean(sleep)), nightsLogged: sleep.length, nightsUnder6h: sleep.filter(x => x < 6).length },
     volume: TRACKED_MUSCLES.map(m => ({ muscle: muscleLabel(m), sets: Math.round((vol[m] ?? 0) * 10) / 10, range: volumeRange(m) })),
     promisesKept: { kept: promises.kept, total: promises.total },
+    disruptions,
+    weeksOnProgram: settings.programLoadedOn ? Math.floor(daysBetween(settings.programLoadedOn, today) / 7) : 0,
     notes,
   };
 }
@@ -155,14 +169,18 @@ export function rulesReport(s: WeekStats): Advice {
   if (!wins.length) wins.push(s.workoutsDone ? 'You showed up. Build on it this week.' : 'Nothing logged yet — this week is a clean slate.');
 
   const changes: string[] = [];
+  const disrupted = s.disruptions.length > 0;
+  if (disrupted) {
+    changes.push(`${s.disruptions.join(', ')} this week — no catching up and no crash dieting. Straight back to the normal plan; the scale will read high for a few days (water), so ignore it.`);
+  }
   for (const e of failed.slice(0, 2)) {
     changes.push(`${e.name} has been below your rep range ${e.failedStreak} sessions running. Drop the weight 5–10% and rebuild to the top of the range.`);
   }
   if (s.deloadDue) changes.push('Most lifts have stalled over two weeks. Take the deload week — you will come back stronger.');
-  if (s.workoutsDone < s.workoutsPlanned) {
+  if (s.workoutsDone < s.workoutsPlanned && !disrupted) {
     changes.push(`You trained ${s.workoutsDone} of ${s.workoutsPlanned} times. If a day doesn't work, move it on the week planner rather than skipping it.`);
   }
-  if (s.nutritionPhase && s.nutritionPhase.status !== 'on-track' && s.nutritionPhase.status !== 'unknown') changes.push(s.nutritionPhase.advice);
+  if (!disrupted && s.nutritionPhase && s.nutritionPhase.status !== 'on-track' && s.nutritionPhase.status !== 'unknown') changes.push(s.nutritionPhase.advice);
   if (s.protein.target && s.protein.daysLogged >= 3 && (s.protein.average ?? 0) < s.protein.target * 0.9) {
     changes.push(`Protein averaged ${s.protein.average}g vs ${s.protein.target}g. Add a shake or an extra portion of meat/Greek yoghurt daily — it's the cheapest muscle insurance there is.`);
   }
@@ -175,6 +193,18 @@ export function rulesReport(s: WeekStats): Advice {
     changes.push(`Sleep averaged ${hrs}h${short}. Muscle is built while you sleep — get to 7–9 hours before chasing more weight. Set a fixed bedtime 8 hours before your alarm.`);
   }
   if (s.calories.daysLogged < 4 && s.calories.target) changes.push(`Calories logged on ${s.calories.daysLogged} of 7 days. Even rough logs let me fine-tune your target — I'm steering by the scale until then.`);
+  // After ~8 solid weeks, add volume where it pays most: fast-recovering muscles, on days they aren't trained.
+  const solid = s.weeksOnProgram >= 8 && s.workoutsDone >= s.workoutsPlanned && !failed.length && !disrupted && !s.deloadDue;
+  if (solid && changes.length < 3) {
+    const extra: Record<string, string> = {
+      'Side delts': '2–3 sets of cable lateral raises at the end of Legs or Pull',
+      Biceps: '2 sets of incline DB curls at the end of Push',
+      'Rear delts': '2 sets of rear delt flyes at the end of Push or Legs',
+      Calves: 'a 4th set of calf raises on Lower and Legs',
+    };
+    const pick = s.volume.filter(v => extra[v.muscle]).sort((a, b) => a.sets / a.range[0] - b.sets / b.range[0])[0];
+    if (pick) changes.push(`${s.weeksOnProgram} solid weeks in — you've earned a specialisation block. ${pick.muscle} is at ${pick.sets} sets: add ${extra[pick.muscle]}. Keep it for 4–6 weeks, then reassess.`);
+  }
   if (s.rampUp) changes.push('You are still in the ramp-up weeks: beat your targets and the app jumps 2 reps at a time. Leave 1–2 reps in the tank.');
   if (!changes.length) changes.push('Keep everything the same. The plan is working — beat last week by one rep.');
 

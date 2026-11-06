@@ -102,6 +102,15 @@ function Strength({ range }: { range: Range }) {
   const [metric, setMetric] = useState<Metric>('e1rm');
   const exId = picked && exerciseIds.includes(picked) ? picked : exerciseIds[0];
 
+  const exKind = useStore(s => (exId ? s.exercise(exId)?.kind : undefined)) ?? 'weighted';
+  const checkIns = useStore(s => s.checkIns);
+  const baselineWeight = useStore(s => s.profile.baseline?.weight);
+  /** Bodyweight on a date: nearest earlier weigh-in, else the setup weight. */
+  const bodyweightOn = (date: string) => {
+    const past = Object.values(checkIns).filter(c => c.bodyweight != null && c.date <= date).sort((a, b) => b.date.localeCompare(a.date))[0];
+    return past?.bodyweight ?? baselineWeight ?? 75;
+  };
+
   const series = useMemo(() => {
     if (!exId) return [];
     let best = 0;
@@ -112,10 +121,14 @@ function Strength({ range }: { range: Range }) {
       if (!le) continue;
       const ws = le.sets.filter(x => x.completed && !x.warmup);
       if (!ws.length) continue;
-      const top = Math.max(...ws.map(x => e1rm(x.weight, x.reps)));
+      // Assisted and bodyweight lifts: the real load is your bodyweight minus assistance / plus the belt.
+      const kind = le.kind ?? exKind;
+      const bw = kind === 'weighted' ? 0 : bodyweightOn(ymd(s.startedAt));
+      const loadOf = (w: number) => (kind === 'assisted' ? Math.max(0, bw - w) : kind === 'bodyweight' ? bw + w : w);
+      const top = Math.max(...ws.map(x => e1rm(loadOf(x.weight), x.reps)));
       const pr = !s.deload && best > 0 && top > best;
       if (!s.deload) best = Math.max(best, top);
-      const up = !s.deload && prevWeight != null && le.workingWeight > prevWeight;
+      const up = !s.deload && prevWeight != null && (kind === 'assisted' ? le.workingWeight < prevWeight : le.workingWeight > prevWeight);
       if (!s.deload && le.countsForProgression) prevWeight = le.workingWeight;
       const date = ymd(s.startedAt);
       out.push({
@@ -123,13 +136,14 @@ function Strength({ range }: { range: Range }) {
         e1rm: toUnit(top, u),
         weight: toUnit(le.workingWeight, u),
         reps: achievedReps(le.sets, settings.basis) ?? 0,
-        volume: Math.round(toUnit(ws.reduce((v, x) => v + x.weight * x.reps, 0), u)),
+        volume: Math.round(toUnit(ws.reduce((v, x) => v + loadOf(x.weight) * x.reps, 0), u)),
         deload: s.deload, pr, up,
         note: [s.deload && 'Deload', up && 'Weight increased', pr && 'New PR'].filter(Boolean).join(' · ') || undefined,
       });
     }
     return out.filter(p => p.date >= from);
-  }, [sessions, exId, from, u, settings.basis]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, exId, from, u, settings.basis, exKind, checkIns]);
 
   const deloads = phases.filter(p => p.type === 'deload').map(p => ({ x1: ts(p.startDate), x2: ts(p.endDate ?? addDays(p.startDate, 6)) }));
 

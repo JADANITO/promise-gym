@@ -2,12 +2,16 @@ import { useState } from 'react';
 import { useStore } from '../data/store';
 import { quoteFor } from '../data/quotes';
 import { PHASE_LABEL, planSnapshot, weeklyCheckInDue } from '../data/plan';
-import { addDays, daysBetween, fmtDate, minutesOf, parseYmd, ymd } from '../engine/dates';
+import { PROGRAM_VERSION } from '../data/program';
+import { addDays, daysBetween, fmtDate, minutesOf, parseYmd, weekStart, ymd } from '../engine/dates';
 import { DELOAD_DAYS, analyzePlateau, nextTemplate, phaseWeek, plateauCheckDue } from '../engine/phases';
 import { DAY_NAMES, plannedFor, promisesFor, weekPlan, type PlanDay } from '../engine/schedule';
 import { NumberField, Sheet, WeightInput } from '../components/ui';
 import { PHASE_COLOR } from '../components/plan';
 import { fmtBw, fmtRateW, fmtW } from '../format';
+import type { LifeEvent } from '../types';
+
+const EVENT_LABEL: Record<LifeEvent['type'], string> = { ill: 'Ill', away: 'Away', sore: 'Too sore', other: 'Off' };
 
 export function Home({ go }: { go: (r: string) => void }) {
   const s = useStore();
@@ -19,10 +23,13 @@ export function Home({ go }: { go: (r: string) => void }) {
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const yesterday = addDays(today, -1);
   const tracking = Object.keys(ci).some(d => d <= yesterday);
-  const yesterdayMissing = tracking && (ci[yesterday]?.calories == null && ci[yesterday]?.protein == null);
+  const event = s.eventToday();
+  // Ill or away: no nagging about the scale or food. Just soreness still logs as normal.
+  const offPlan = !!event && event.type !== 'sore';
+  const yesterdayMissing = tracking && !offPlan && (ci[yesterday]?.calories == null && ci[yesterday]?.protein == null);
   const hasSchedule = s.settings.schedule.some(Boolean);
-  const week = weekPlan(s.settings, s.sessions, today);
-  const promises = promisesFor({ settings: s.settings, sessions: s.sessions, checkIns: ci, weekly: s.weeklyCheckIns, target: plan.target, today, weekOf: today });
+  const week = weekPlan(s.settings, s.sessions, today, s.lifeEvents);
+  const promises = promisesFor({ settings: s.settings, sessions: s.sessions, checkIns: ci, weekly: s.weeklyCheckIns, target: plan.target, today, weekOf: today, events: s.lifeEvents });
   const [plateauOpen, setPlateauOpen] = useState(false);
   const u = s.settings.units;
 
@@ -42,6 +49,14 @@ export function Home({ go }: { go: (r: string) => void }) {
 
       <div className="card"><p className="quote">{quote}</p></div>
 
+      {s.settings.programVersion !== PROGRAM_VERSION && s.settings.onboarded && (
+        <div className="card accent stack">
+          <h3 className="bold">Your new program is ready</h3>
+          <p className="small muted">Upper · Lower · Rest · Pull · Push · Legs · Rest, with your logged numbers carried over. Current workouts are archived; history stays.</p>
+          <button className="btn primary block" onClick={() => s.loadProgram()}>Load my program</button>
+        </div>
+      )}
+
       {!plan.phase && (
         <div className="card accent stack">
           <h3 className="bold">Let your PT build your plan</h3>
@@ -50,7 +65,9 @@ export function Home({ go }: { go: (r: string) => void }) {
         </div>
       )}
 
-      {weeklyCheckInDue(s, today) && (
+      {event && <OffPlanCard event={event} />}
+
+      {weeklyCheckInDue(s, today) && !offPlan && (
         <div className="card accent stack">
           <h3 className="bold">Sunday check-in</h3>
           <p className="small muted">2 minutes: waist, clothes, photos, phase decision and next week's targets.</p>
@@ -58,7 +75,7 @@ export function Home({ go }: { go: (r: string) => void }) {
         </div>
       )}
 
-      {ci[today]?.bodyweight == null && <MorningCheckIn date={today} />}
+      {ci[today]?.bodyweight == null && !offPlan && <MorningCheckIn date={today} />}
 
       {plateauCheckDue(block, today) && (
         <div className="card warn stack">
@@ -71,7 +88,7 @@ export function Home({ go }: { go: (r: string) => void }) {
       <TodayCard go={go} week={week} />
       {hasSchedule && <WeekStrip week={week} />}
 
-      {(plan.target || nowMin >= minutesOf(s.settings.caloriesTime)) && <NutritionCard date={today} title="Today's food" />}
+      {!offPlan && (plan.target || nowMin >= minutesOf(s.settings.caloriesTime)) && <NutritionCard date={today} title="Today's food" />}
       {yesterdayMissing && <NutritionCard date={yesterday} title="Yesterday's food (catch-up)" compact />}
 
       <div className="stats">
@@ -82,7 +99,7 @@ export function Home({ go }: { go: (r: string) => void }) {
         <div className="stat"><div className="v">{plan.comp ? `~${plan.comp.bodyFat.toFixed(1)}%` : '—'}</div><div className="l">Body fat est.{s.profile.goalBodyFat ? ` · goal ${s.profile.goalBodyFat}%` : ''}</div></div>
         <div className="stat"><div className="v">{promises.kept}/{promises.total}</div><div className="l">Promises kept this week</div></div>
       </div>
-      {plan.status && plan.status.status !== 'unknown' && (
+      {plan.status && plan.status.status !== 'unknown' && !offPlan && (
         <div className="card tight row">
           <span className={`pill ${plan.status.status === 'on-track' ? 'good' : 'warn'}`}>{plan.status.status === 'on-track' ? 'On track' : plan.status.status === 'fast' ? 'Too fast' : 'Too slow'}</span>
           <span className="small grow">{plan.status.advice}</span>
@@ -95,16 +112,83 @@ export function Home({ go }: { go: (r: string) => void }) {
   );
 }
 
+function OffPlanCard({ event }: { event: LifeEvent }) {
+  const end = useStore(s => s.endLifeEvent);
+  const advice = {
+    ill: "Rest up. No training, no weigh-ins, no food targets — just eat enough protein and sleep. If it's only a head cold and you feel fine, a light session is OK; anything in your chest or a fever, stay home.",
+    away: "Enjoy it. Scale readings from now until 3 days after you're back are ignored — holiday water weight isn't fat. When you're back, it's straight back to the plan, no compensating.",
+    sore: "Soreness from a long layoff is normal and fades fast after the first sessions. Walk, stretch, eat your protein. Tomorrow you'll be fine.",
+    other: 'Day off. Back to the plan tomorrow.',
+  }[event.type];
+  return (
+    <div className="card warn stack">
+      <div className="row between">
+        <h3 className="bold">{EVENT_LABEL[event.type]}{event.to > event.from ? ` until ${fmtDate(event.to, { weekday: 'short', day: 'numeric', month: 'short' })}` : ' today'}</h3>
+        <button className="btn sm" onClick={() => end(event.id)}>I'm back</button>
+      </div>
+      <p className="small">{advice}</p>
+    </div>
+  );
+}
+
+function CantTrainSheet({ open, onClose, hasSession }: { open: boolean; onClose: () => void; hasSession: boolean }) {
+  const add = useStore(s => s.addLifeEvent);
+  const today = ymd();
+  const [type, setType] = useState<LifeEvent['type']>('ill');
+  const [to, setTo] = useState(today);
+  const [move, setMove] = useState(true);
+  const [msg, setMsg] = useState<string | null>(null);
+  if (!open) return null;
+  const save = () => {
+    const movedTo = add({ type, from: today, to: to < today ? today : to }, { moveToday: hasSession && type !== 'ill' && move });
+    setMsg(movedTo ? `Today's session moved to ${fmtDate(movedTo, { weekday: 'long' })}.` : null);
+    if (!movedTo) onClose();
+  };
+  return (
+    <Sheet open onClose={onClose} title="Can't train today">
+      {msg ? (
+        <div className="stack"><p>{msg}</p><button className="btn primary block" onClick={onClose}>OK</button></div>
+      ) : (
+        <div className="stack">
+          <div className="chips">
+            {(['ill', 'away', 'sore', 'other'] as LifeEvent['type'][]).map(t => (
+              <button key={t} className={`chip ${type === t ? 'on' : ''}`} onClick={() => setType(t)}>{t === 'away' ? 'Away / holiday' : EVENT_LABEL[t]}</button>
+            ))}
+          </div>
+          {(type === 'ill' || type === 'away') && (
+            <div className="field">
+              <label htmlFor="off-until">Until (last day off)</label>
+              <input id="off-until" type="date" className="input" min={today} value={to} onChange={e => setTo(e.target.value || today)} />
+            </div>
+          )}
+          {hasSession && type !== 'ill' && (
+            <label className="row small"><input type="checkbox" checked={move} onChange={e => setMove(e.target.checked)} style={{ width: 22, height: 22 }} /> Move today's session to my next rest day this week</label>
+          )}
+          <p className="tiny muted">
+            {type === 'ill' ? "Sessions are skipped, not crammed in later. Weigh-ins and food targets pause, and the scale is ignored until 3 days after you're better."
+              : type === 'away' ? 'Weigh-ins and food targets pause. Trips of 3+ days push your plan timeline back; 2+ weeks away brings back the ramp-up when you return.'
+                : "No penalty — it won't count against your promises."}
+          </p>
+          <button className="btn primary block" onClick={save}>Take the day{to > today ? 's' : ''} off</button>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
 function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
   const s = useStore();
   const today = ymd();
+  const [cantTrain, setCantTrain] = useState(false);
   const name = (id: string) => s.templates.find(t => t.id === id)?.name ?? 'Workout';
   const block = s.currentPhase();
   const hasSchedule = s.settings.schedule.some(Boolean);
-  const planned = hasSchedule ? plannedFor(s.settings, today) : nextTemplate(s.templates, s.sessions)?.id ?? null;
+  const event = s.eventToday();
+  const planned = hasSchedule ? plannedFor(s.settings, today, s.lifeEvents) : nextTemplate(s.templates.filter(x => !x.archived), s.sessions)?.id ?? null;
   const t = s.templates.find(x => x.id === planned);
   const doneToday = s.sessions.some(x => ymd(x.startedAt) === today);
   const missed = week.filter(d => d.status === 'missed');
+  const absToday = t?.exercises.some(e => s.exercise(e.exerciseId)?.primary?.includes('abs'));
 
   if (s.active) {
     return (
@@ -119,7 +203,7 @@ function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
     return (
       <div className="card accent stack center">
         <h2 className="bold">Build your first workout</h2>
-        <p className="muted small">Or load the PT program in Settings → Training split.</p>
+        <p className="muted small">Or load your program in Settings → Training split.</p>
         <button className="btn primary big block" onClick={() => go('edit/new')}>Create workout</button>
       </div>
     );
@@ -134,6 +218,8 @@ function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
           <h2 className="bold" style={{ fontSize: 24 }}>Done for today ✓</h2>
           <p className="small muted">Eat your protein, sleep 7–9 hours. That's where the muscle is built.</p>
         </>
+      ) : event ? (
+        <h2 className="bold" style={{ fontSize: 24 }}>Day off — {EVENT_LABEL[event.type].toLowerCase()}</h2>
       ) : t ? (
         <>
           <h2 className="bold" style={{ fontSize: 26 }}>{t.name}</h2>
@@ -144,20 +230,28 @@ function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
         <>
           <h2 className="bold" style={{ fontSize: 24 }}>Rest day</h2>
           <p className="small muted">Recovery is part of the plan. Walk, stretch, hit your protein.</p>
+          {!absToday && (
+            <div className="card tight stack" style={{ gap: 4 }}>
+              <b className="small">Optional 5-minute abs (at home)</b>
+              <span className="small muted">2 rounds: 45s plank · 15 lying leg raises · 20 crunches · 30s side plank each side. Rest 60s between rounds.</span>
+            </div>
+          )}
         </>
       )}
-      {!doneToday && missed.length > 0 && (
+      {!doneToday && !event && missed.length > 0 && (
         <div className="stack" style={{ gap: 6 }}>
           {missed.map(d => (
             <button key={d.date} className="btn sm" onClick={() => moveHere(d)}>Missed {DAY_NAMES[parseYmd(d.date).getDay()]}'s {name(d.planned!)} — do it today</button>
           ))}
         </div>
       )}
-      {!t && !doneToday && (
+      {!t && !doneToday && !event && (
         <div className="chips">
           {s.templates.filter(x => !x.archived).map(x => <button key={x.id} className="chip" onClick={() => go(`start/${x.id}`)}>{x.name}</button>)}
         </div>
       )}
+      {!doneToday && !event && <button className="btn sm ghost" onClick={() => setCantTrain(true)}>Can't train today?</button>}
+      <CantTrainSheet open={cantTrain} onClose={() => setCantTrain(false)} hasSession={!!t} />
     </div>
   );
 }
@@ -166,7 +260,8 @@ function WeekStrip({ week }: { week: PlanDay[] }) {
   const s = useStore();
   const [open, setOpen] = useState<PlanDay | null>(null);
   const name = (id: string | null) => (id ? s.templates.find(t => t.id === id)?.name ?? '?' : 'Rest');
-  const color = { done: 'var(--accent)', missed: 'var(--bad)', today: 'var(--text)', upcoming: 'var(--muted)', rest: 'var(--border)', extra: 'var(--accent)' };
+  const color = { done: 'var(--accent)', missed: 'var(--bad)', today: 'var(--text)', upcoming: 'var(--muted)', rest: 'var(--border)', extra: 'var(--accent)', off: 'var(--warn)' };
+  const swaps = s.exerciseOverrides.filter(o => o.date >= weekStart(ymd()));
   return (
     <div className="card tight">
       <div className="row between"><span className="small bold">This week</span><span className="tiny muted">Tap a day to move a session</span></div>
@@ -175,14 +270,17 @@ function WeekStrip({ week }: { week: PlanDay[] }) {
           <button key={d.date} onClick={() => setOpen(d)} style={{ background: d.status === 'today' ? 'var(--surface-2)' : 'none', border: `1px solid ${d.status === 'today' ? 'var(--text)' : 'var(--border)'}`, borderRadius: 10, padding: '6px 2px', minHeight: 64 }}>
             <div className="tiny muted">{DAY_NAMES[parseYmd(d.date).getDay()]}</div>
             <div style={{ width: 10, height: 10, borderRadius: 5, background: color[d.status], margin: '4px auto' }} />
-            <div className="tiny" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.status === 'extra' ? '+' : name(d.planned)}</div>
+            <div className="tiny" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.status === 'extra' ? '+' : d.event ? EVENT_LABEL[d.event.type] : name(d.planned)}</div>
           </button>
         ))}
       </div>
+      {swaps.length > 0 && (
+        <p className="tiny muted mt">{swaps.map(o => `${s.exerciseName(o.withTe.exerciseId)} → ${DAY_NAMES[parseYmd(o.date).getDay()]}`).join(' · ')} (this week only)</p>
+      )}
       {open && (
         <Sheet open onClose={() => setOpen(null)} title={fmtDate(open.date, { weekday: 'long', day: 'numeric', month: 'short' })}>
           <div className="stack">
-            <p className="small muted">Planned: <b>{name(open.planned)}</b>{open.date in s.settings.scheduleOverrides ? ' (moved this week)' : ''}</p>
+            <p className="small muted">Planned: <b>{open.event ? `Off (${EVENT_LABEL[open.event.type]})` : name(open.planned)}</b>{open.date in s.settings.scheduleOverrides ? ' (moved this week)' : ''}</p>
             <div className="chips">
               {s.templates.filter(t => !t.archived).map(t => (
                 <button key={t.id} className={`chip ${open.planned === t.id ? 'on' : ''}`} onClick={() => {

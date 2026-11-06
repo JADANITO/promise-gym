@@ -1,4 +1,4 @@
-import type { ClothesFit, DailyCheckIn, Measurement, NutritionPhase, NutritionPhaseType, Profile, WeeklyTarget } from '../types';
+import type { ClothesFit, DailyCheckIn, LifeEvent, Measurement, NutritionPhase, NutritionPhaseType, Profile, WeeklyTarget } from '../types';
 import { addDays, daysBetween } from './dates';
 import { KCAL_PER_KG, calories as calorieSeries, mean, movingAverage, slopePerDay, weights as weightSeries } from './stats';
 
@@ -35,6 +35,16 @@ export function bodyFatFromWaist(profile: Profile, waistCm: number): number | nu
   if (!profile.heightCm) return null;
   const offset = profile.baseline ? profile.baseline.bodyFat - rfm(profile.heightCm, profile.baseline.waistCm) : 0;
   return Math.min(45, Math.max(4, rfm(profile.heightCm, waistCm) + offset));
+}
+
+/**
+ * Drop scale readings from illness or time away (and 3 days after): holiday salt and carbs, or an
+ * illness, swing water weight a kilo or two that isn't fat or muscle and would wreck the trend.
+ */
+export function excludeDisrupted(checkIns: DailyCheckIn[], events: LifeEvent[] = []): DailyCheckIn[] {
+  const spans = events.filter(e => e.type === 'ill' || e.type === 'away').map(e => [e.from, addDays(e.to, 3)] as const);
+  if (!spans.length) return checkIns;
+  return checkIns.map(c => (spans.some(([a, b]) => c.date >= a && c.date <= b) ? { ...c, bodyweight: undefined, calories: undefined } : c));
 }
 
 export function trendWeight(checkIns: DailyCheckIn[]): number | null {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useStore } from '../data/store';
 import { LengthInput } from '../components/ui';
 import { PHASE_LABEL, planSnapshot, targetWeekFor } from '../data/plan';
-import { bodyFatFromWaist, composition, nextTargets, rateFor, recommendPhase, targetFor } from '../engine/body';
+import { bodyFatFromWaist, composition, excludeDisrupted, nextTargets, rateFor, recommendPhase, targetFor } from '../engine/body';
 import { addDays, weekStart, ymd } from '../engine/dates';
 import { mean } from '../engine/stats';
 import { promisesFor } from '../engine/schedule';
@@ -38,7 +38,7 @@ export function WeeklyCheckInScreen({ go }: { go: (r: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
-  const ci = Object.values(s.checkIns);
+  const ci = excludeDisrupted(Object.values(s.checkIns), s.lifeEvents);
   const thisWeek = mean(ci.filter(c => c.bodyweight != null && c.date > addDays(today, -7)).map(c => c.bodyweight!));
   const lastWeek = mean(ci.filter(c => c.bodyweight != null && c.date > addDays(today, -14) && c.date <= addDays(today, -7)).map(c => c.bodyweight!));
   const promises = promisesFor({ settings: s.settings, sessions: s.sessions, checkIns: s.checkIns, weekly: s.weeklyCheckIns, target: targetFor(s.weeklyTargets, today), today, weekOf: today });

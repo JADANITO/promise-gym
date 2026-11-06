@@ -1,10 +1,11 @@
 import type { Store } from './store';
-import { composition, nextTargets, phaseStatus, simulateRoadmap, targetFor } from '../engine/body';
+import { composition, excludeDisrupted, nextTargets, phaseStatus, simulateRoadmap, targetFor } from '../engine/body';
 import { addDays, daysBetween, parseYmd, weekStart, ymd } from '../engine/dates';
 
 /** Everything the screens need to know about the body-composition plan right now. */
 export function planSnapshot(s: Store, today = ymd()) {
-  const ci = Object.values(s.checkIns);
+  // Weigh-ins while ill or away (and 3 days after) don't count toward the trend.
+  const ci = excludeDisrupted(Object.values(s.checkIns), s.lifeEvents);
   const comp = composition(s.profile, ci, s.measurements, today);
   const phase = s.currentNutritionPhase();
   const weeksIn = phase ? Math.floor(daysBetween(phase.startDate, today) / 7) : 0;
@@ -23,9 +24,10 @@ export function ensureWeeklyTargets(s: Store, today = ymd()) {
   if (!phase) return;
   const mon = weekStart(today);
   if (s.weeklyTargets.some(t => t.weekStart === mon)) return;
-  const comp = composition(s.profile, Object.values(s.checkIns), s.measurements, today);
+  const ci = excludeDisrupted(Object.values(s.checkIns), s.lifeEvents);
+  const comp = composition(s.profile, ci, s.measurements, today);
   if (!comp) return;
-  s.setWeeklyTarget(nextTargets({ phase, comp, checkIns: Object.values(s.checkIns), previous: targetFor(s.weeklyTargets, today), today, weekStart: mon }));
+  s.setWeeklyTarget(nextTargets({ phase, comp, checkIns: ci, previous: targetFor(s.weeklyTargets, today), today, weekStart: mon }));
 }
 
 /** The Sunday check-in is due on Sundays (and Monday as a catch-up) if not done in the last 5 days. */

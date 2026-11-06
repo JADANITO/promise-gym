@@ -56,7 +56,7 @@ export function Setup({ go, first = false }: { go: (r: string) => void; first?: 
     s.startNutritionPhase(plan.type, plan.rate, plan.roadmap[0].note, weight, waistCm);
     s.setWeeklyTarget(plan.targets);
     s.completeWeeklyCheckIn({ date: today, waistCm, photoIds: [], decision: `Plan created: ${PHASE_LABEL[plan.type]}` });
-    if (program === 'pt') s.loadStarterProgram();
+    if (program === 'pt') s.loadProgram();
     go('home');
   };
 
@@ -150,8 +150,8 @@ export function Setup({ go, first = false }: { go: (r: string) => void; first?: 
         <div className="card stack">
           <h2 className="bold">Training</h2>
           <button className={`card tight stack ${program === 'pt' ? 'accent' : ''}`} style={{ textAlign: 'left' }} onClick={() => setProgram('pt')}>
-            <b>Load my PT program</b>
-            <span className="small muted">Upper (Mon) · Lower (Tue) · Rest · Pull (Thu) · Legs (Fri) · Push (Sat) · Rest. ~10–14 hard sets per muscle a week, all editable.{s.templates.length ? ' Keeps your existing workouts too.' : ''}</span>
+            <b>Load my program</b>
+            <span className="small muted">Upper (Mon) · Lower (Tue) · Rest · Pull (Thu) · Push (Fri) · Legs (Sat) · Rest. 3 sets per exercise, abs every training day, your logged numbers carried over.{s.templates.length ? ' Keeps your existing workouts too.' : ''}</span>
           </button>
           <button className={`card tight stack ${program === 'own' ? 'accent' : ''}`} style={{ textAlign: 'left' }} onClick={() => setProgram('own')}>
             <b>I'll build my own</b>

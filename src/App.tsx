@@ -43,16 +43,18 @@ function useBackgroundChecks() {
       const today = ymd(now);
       const min = now.getHours() * 60 + now.getMinutes();
       const ci = s.checkIns[today];
+      const off = s.eventToday();
+      const quiet = !!off && off.type !== 'sore'; // ill or away: no reminders
 
-      if (min >= minutesOf(s.settings.weighInTime) && ci?.bodyweight == null && s.notified.weight !== today) {
+      if (!quiet && min >= minutesOf(s.settings.weighInTime) && ci?.bodyweight == null && s.notified.weight !== today) {
         s.markNotified('weight', today);
         void notify('Good morning — log your weight', 'One tap to keep your goal on track.', 'weigh-in');
       }
-      if (min >= minutesOf(s.settings.caloriesTime) && ci?.protein == null && ci?.calories == null && s.notified.calories !== today) {
+      if (!quiet && min >= minutesOf(s.settings.caloriesTime) && ci?.protein == null && ci?.calories == null && s.notified.calories !== today) {
         s.markNotified('calories', today);
         void notify("Log today's protein & calories", 'Five seconds — it keeps your targets accurate.', 'calories');
       }
-      if (weeklyCheckInDue(s, today) && min >= 9 * 60 && s.notified.checkin !== today) {
+      if (!quiet && weeklyCheckInDue(s, today) && min >= 9 * 60 && s.notified.checkin !== today) {
         s.markNotified('checkin', today);
         void notify('Sunday check-in', "Waist, photos and next week's targets — 2 minutes.", 'checkin');
       }

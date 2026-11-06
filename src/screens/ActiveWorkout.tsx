@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore, type ActiveExercise } from '../data/store';
-import type { LoggedSet } from '../types';
+import { trackHistory, useStore, type ActiveExercise } from '../data/store';
+import type { CableStation, LoggedSet } from '../types';
 import { ExercisePicker, NumberField, Sheet, WeightInput } from '../components/ui';
-import { fmtClock, fmtDuration, fmtW, uid } from '../format';
+import { fmtClock, fmtDuration, fmtLoad, fmtW, uid } from '../format';
 import { beep, notify, unlockAudio, vibrate } from '../alerts';
 
 export function ActiveWorkout({ go }: { go: (r: string) => void }) {
@@ -75,35 +75,42 @@ function AddWeightSheet({ exerciseId, onClose, onAdd }: { exerciseId: string | n
   );
 }
 
-function useLastTime(exerciseId: string) {
+function useLastTime(ex: ActiveExercise) {
   const sessions = useStore(s => s.sessions);
   return useMemo(() => {
-    const sorted = [...sessions].sort((a, b) => b.startedAt - a.startedAt);
-    for (const s of sorted) {
-      const le = s.exercises.find(e => e.exerciseId === exerciseId && !e.skipped);
-      if (le) {
-        const ws = le.sets.filter(x => !x.warmup && x.completed);
-        if (ws.length) return { weight: le.workingWeight, reps: ws.map(x => x.reps), deload: s.deload };
-      }
-    }
-    return null;
-  }, [sessions, exerciseId]);
+    const track = trackHistory(sessions, ex.source, ex.station);
+    const last = track.sessions[track.sessions.length - 1];
+    const le = last?.exercises[last.exercises.length - 1];
+    const ws = le?.sets.filter(x => !x.warmup && x.completed) ?? [];
+    return le && ws.length ? { weight: le.workingWeight, reps: ws.map(x => x.reps), deload: last.deload, before: !track.real } : null;
+  }, [sessions, ex.source, ex.station]);
 }
 
 function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const units = useStore(s => s.settings.units);
   const name = useStore(s => s.exerciseName);
   const update = useStore(s => s.updateActive);
+  const completeSet = useStore(s => s.completeSet);
+  const retarget = useStore(s => s.retarget);
+  const setStation = useStore(s => s.setStation);
   const startTimer = useStore(s => s.startTimer);
   const setIncrease = useStore(s => s.setIncreaseWeight);
-  const last = useLastTime(ex.exerciseId);
+  const last = useLastTime(ex);
   const [sheet, setSheet] = useState<null | 'weight' | 'rest' | 'swap' | { setId: string }>(null);
-  // Pre-fill the next weight from this machine's increment; the user can always change it.
-  const [incKg, setIncKg] = useState<number | undefined>(ex.firstWeight ? undefined : ex.increment ? ex.baseWeight + ex.increment : undefined);
+  const kind = ex.kind ?? 'weighted';
+  const step = ex.increment ?? (kind === 'bodyweight' ? 2.5 : undefined);
+  // Pre-fill the next load from this machine's step; the user can always change it.
+  const [incKg, setIncKg] = useState<number | undefined>(() => {
+    if (ex.firstWeight || step == null) return undefined;
+    return kind === 'assisted' ? Math.max(0, ex.baseWeight - step) : ex.baseWeight + step;
+  });
   const title = name(ex.exerciseId);
   const working = ex.sets.filter(s => !s.warmup);
   const needsNewWeight = ex.increasePrompted && !ex.increaseHandled;
   const pickWeight = needsNewWeight && ex.firstWeight;
+  const load = (kg: number) => fmtLoad(kg, kind, units);
+  const myo = ex.technique === 'myo-match';
+  const firstSetId = working[0]?.id;
 
   const mutateEx = (fn: (e: ActiveExercise) => void) => update(a => {
     const e = a.session.exercises.find(x => x.id === ex.id);
@@ -113,12 +120,23 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const toggle = (setId: string) => {
     unlockAudio();
     const set = ex.sets.find(s => s.id === setId)!;
-    mutateEx(e => { const s = e.sets.find(x => x.id === setId)!; s.completed = !s.completed; });
-    if (!set.completed) {
-      const idx = ex.sets.filter(s => !s.warmup).findIndex(s => s.id === setId) + 1;
-      startTimer(ex.restSec, set.warmup ? `${title} · warm-up` : `${title} · set ${idx} done`);
+    if (completeSet(ex.id, setId)) {
+      const idx = working.findIndex(s => s.id === setId) + 1;
+      const next = working[idx];
+      const after = next ? ` · next: ${myo ? 'match' : 'aim for'} ${useStore.getState().active?.session.exercises.find(e => e.id === ex.id)?.sets.find(s => s.id === next.id)?.targetReps ?? next.targetReps}` : '';
+      startTimer(ex.restSec, set.warmup ? `${title} · warm-up` : `${title} · set ${idx} done${after}`);
     }
   };
+  const setReps = (setId: string, fn: (r: number) => number) => {
+    mutateEx(e => { const x = e.sets.find(y => y.id === setId)!; x.reps = Math.max(0, fn(x.reps)); });
+    const s = ex.sets.find(y => y.id === setId);
+    if (setId === firstSetId && s?.completed) retarget(ex.id);
+  };
+  const increaseText = kind === 'assisted'
+    ? 'You hit the top of your range last time, so drop the assistance today.'
+    : kind === 'bodyweight'
+      ? 'You hit the top of your range last time, so add weight with the belt today.'
+      : 'You hit the top of your range last time, so increase the weight today.';
 
   let n = 0;
   return (
@@ -130,29 +148,42 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
         </div>
         {ex.machineNote && <p className="muted small">{ex.machineNote}</p>}
         <div className="ex-meta">
-          <span className="pill accent num">{pickWeight ? 'Pick a weight' : fmtW(ex.workingWeight, units)}</span>
-          <span className="pill num">Target: {ex.targetReps} reps · Range {ex.repMin}–{ex.repMax}</span>
+          <span className="pill accent num">{pickWeight ? 'Pick a weight' : load(ex.workingWeight)}</span>
+          <span className="pill num">Set 1: {ex.targetReps} reps · Range {ex.repMin}–{ex.repMax}</span>
           <span className="pill num">Rest {fmtClock(ex.restSec)}</span>
+          {myo && <span className="pill">Myo-rep match</span>}
+          {ex.swappedFrom && <span className="pill warn">From {ex.swappedFrom}</span>}
           {!ex.countsForProgression && <span className="pill warn">One-off weight</span>}
         </div>
+        {ex.station && (
+          <div className="row mt" role="group" aria-label="Cable station">
+            <span className="small muted">Cable:</span>
+            {(['small', 'big'] as CableStation[]).map(st => (
+              <button key={st} className={`chip ${ex.station === st ? 'on' : ''}`} onClick={() => {
+                if (ex.sets.some(s => s.completed) && !confirm('Switch station? Logged sets on this exercise will be cleared.')) return;
+                setStation(ex.id, st);
+              }}>{st === 'small' ? 'Small' : 'Big'}</button>
+            ))}
+          </div>
+        )}
         {last && (
           <p className="muted small mt num">
-            Last: {fmtW(last.weight, units)} × {last.reps.join(', ')}{last.deload ? ' (deload)' : ''}
+            {last.before ? 'Before the app' : 'Last'}: {load(last.weight)} × {last.reps.join(', ')}{last.deload ? ' (deload)' : ''}
           </p>
         )}
       </div>
 
       {needsNewWeight ? (
         <div className="banner stack">
-          <div>{ex.firstWeight ? ex.reason : 'You hit the top of your range last time, so increase the weight today.'}</div>
-          {!ex.firstWeight && ex.increment ? <div className="small">Pre-filled +{fmtW(ex.increment, units)} (this machine's step) — change it if needed.</div> : null}
+          <div>{ex.firstWeight ? ex.reason : increaseText}</div>
+          {!ex.firstWeight && step ? <div className="small">Pre-filled {kind === 'assisted' ? '−' : '+'}{fmtW(step, units)} — change it if needed.</div> : null}
           <div className="row">
-            <div className="grow" style={{ color: 'var(--text)' }}><WeightInput kg={incKg} onChange={setIncKg} placeholder={ex.firstWeight ? 'Starting weight' : undefined} /></div>
+            <div className="grow" style={{ color: 'var(--text)' }}><WeightInput kg={incKg} onChange={setIncKg} placeholder={ex.firstWeight ? (kind === 'assisted' ? 'Assistance' : 'Starting weight') : undefined} /></div>
             <button className="btn" style={{ background: 'var(--bg)', color: 'var(--text)' }} disabled={incKg == null} onClick={() => incKg != null && setIncrease(ex.id, incKg)}>Set</button>
           </div>
           {!ex.firstWeight && (
             <button className="btn sm ghost" style={{ color: 'var(--accent-ink)', borderColor: 'var(--accent-ink)' }} onClick={() => setIncrease(ex.id, ex.workingWeight)}>
-              Keep {fmtW(ex.workingWeight, units)} for now
+              Keep {load(ex.workingWeight)} for now
             </button>
           )}
         </div>
@@ -167,6 +198,7 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
         <div>
           {ex.sets.map(s => {
             if (!s.warmup) n++;
+            const isMatch = myo && !s.warmup && n > 1;
             return (
               <div key={s.id} className={`set-row ${s.completed ? 'done' : ''} ${s.warmup ? 'warmup' : ''}`}>
                 <button className="set-idx" style={{ background: 'none', border: 0, padding: 0 }} aria-label="Set details" onClick={() => setSheet({ setId: s.id })}>
@@ -174,18 +206,21 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
                   {s.rpe != null && <div className="tiny muted">@{s.rpe}</div>}
                 </button>
                 <button className="set-w num" onClick={() => setSheet({ setId: s.id })}>
-                  <b>{pickWeight && !s.warmup ? '—' : fmtW(s.weight, units)}</b><br />target {s.targetReps}
+                  <b>{pickWeight && !s.warmup ? '—' : load(s.weight)}</b><br />{isMatch ? 'match' : 'target'} {s.targetReps}
                 </button>
                 <div className="stepper">
-                  <button aria-label="One less rep" onClick={() => mutateEx(e => { const x = e.sets.find(y => y.id === s.id)!; x.reps = Math.max(0, x.reps - 1); })}>−</button>
+                  <button aria-label="One less rep" onClick={() => setReps(s.id, r => r - 1)}>−</button>
                   <input className="num" inputMode="numeric" aria-label="Reps" value={s.reps}
-                    onChange={ev => { const v = parseInt(ev.target.value, 10); mutateEx(e => { e.sets.find(y => y.id === s.id)!.reps = isNaN(v) ? 0 : v; }); }} />
-                  <button aria-label="One more rep" onClick={() => mutateEx(e => { e.sets.find(y => y.id === s.id)!.reps++; })}>+</button>
+                    onChange={ev => { const v = parseInt(ev.target.value, 10); setReps(s.id, () => (isNaN(v) ? 0 : v)); }} />
+                  <button aria-label="One more rep" onClick={() => setReps(s.id, r => r + 1)}>+</button>
                 </div>
                 <button className={`check ${s.completed ? 'on' : ''}`} aria-label={s.completed ? 'Mark set not done' : 'Mark set done'} aria-pressed={s.completed} onClick={() => toggle(s.id)}>✓</button>
               </div>
             );
           })}
+          {!myo && working.length > 1 && !working[0].completed && (
+            <p className="tiny muted" style={{ padding: '6px 16px' }}>Later sets expect your usual drop-off ({ex.drops.slice(1).map(d => `−${d}`).join(', ')}). They re-aim when set 1 is logged.</p>
+          )}
         </div>
       )}
 
@@ -193,7 +228,8 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
         {!ex.skipped && <>
           <button className="btn sm" onClick={() => mutateEx(e => {
             const lastSet = [...e.sets].reverse().find(x => !x.warmup);
-            e.sets.push({ id: uid(), weight: lastSet?.weight ?? e.workingWeight, targetReps: e.targetReps, reps: e.targetReps, completed: false, warmup: false });
+            const t = Math.max(1, (lastSet?.targetReps ?? e.targetReps) - 1);
+            e.sets.push({ id: uid(), weight: lastSet?.weight ?? e.workingWeight, targetReps: t, reps: t, completed: false, warmup: false });
           })}>+ Set</button>
           <button className="btn sm" disabled={working.length <= 1} onClick={() => mutateEx(e => {
             const idx = e.sets.map(x => !x.warmup && !x.completed).lastIndexOf(true);
@@ -208,15 +244,43 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
 
       <WeightSheet open={sheet === 'weight'} ex={ex} onClose={() => setSheet(null)} />
       <RestSheet open={sheet === 'rest'} ex={ex} onClose={() => setSheet(null)} onSave={sec => mutateEx(e => { e.restSec = sec; })} />
-      <SwapPicker open={sheet === 'swap'} exId={ex.id} onClose={() => setSheet(null)} />
+      <SwapSheet open={sheet === 'swap'} ex={ex} title={title} onClose={() => setSheet(null)} />
       {typeof sheet === 'object' && sheet && <SetSheet ex={ex} setId={sheet.setId} onClose={() => setSheet(null)} />}
     </div>
   );
 }
 
-function SwapPicker({ open, exId, onClose }: { open: boolean; exId: string; onClose: () => void }) {
-  const swap = useStore(s => s.swapExercise);
-  return <ExercisePicker open={open} onClose={onClose} onPick={id => { swap(exId, id); onClose(); }} />;
+/** Machine taken? Trade with an exercise from later this week (it moves to that day), or pick any replacement. */
+function SwapSheet({ open, ex, title, onClose }: { open: boolean; ex: ActiveExercise; title: string; onClose: () => void }) {
+  const s = useStore();
+  const [picking, setPicking] = useState(false);
+  if (!open) return null;
+  if (picking) return <ExercisePicker open onClose={() => { setPicking(false); onClose(); }} onPick={id => { s.swapExercise(ex.id, id); setPicking(false); onClose(); }} />;
+  const options = s.swapOptions();
+  const days = [...new Set(options.map(o => o.label))];
+  return (
+    <Sheet open onClose={onClose} title={`Swap ${title}`}>
+      <div className="stack">
+        {options.length ? (
+          <>
+            <p className="small muted">Do one of these instead. <b>{title}</b> moves into that day's workout this week, and everything goes back to normal next week.</p>
+            {days.map(day => (
+              <div key={day}>
+                <h3 className="section-title">{day}</h3>
+                {options.filter(o => o.label === day).map(o => (
+                  <button key={o.te.id} className="list-item" onClick={() => { s.swapAcrossWeek(ex.id, o); onClose(); }}>
+                    <span className="grow">{s.exerciseName(o.te.exerciseId)}</span>
+                    <span className="small muted">{o.te.sets} × {o.te.repMin}–{o.te.repMax}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </>
+        ) : <p className="small muted">No workouts left this week to swap with.</p>}
+        <button className="btn block" onClick={() => setPicking(true)}>Replace with a different exercise (today only)</button>
+      </div>
+    </Sheet>
+  );
 }
 
 function WeightSheet({ open, ex, onClose }: { open: boolean; ex: ActiveExercise; onClose: () => void }) {

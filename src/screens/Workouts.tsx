@@ -151,6 +151,10 @@ function SortableExercise({ ex, title, onPatch, onRemove }: { ex: TemplateExerci
         <div className="field grow"><label>Starting weight</label><WeightInput kg={ex.startWeight || undefined} placeholder="ask on day 1" onChange={kg => onPatch({ startWeight: kg ?? 0 })} /></div>
         <div className="field grow"><label>Weight step</label><WeightInput kg={ex.increment} placeholder="e.g. 2.5" onChange={kg => onPatch({ increment: kg })} /></div>
       </div>
+      <div className="row wrap">
+        <label className="row small"><input type="checkbox" checked={!!ex.cable} onChange={e => onPatch({ cable: e.target.checked || undefined, station: e.target.checked ? ex.station ?? 'small' : undefined })} style={{ width: 22, height: 22 }} /> Cable (big/small station)</label>
+        <label className="row small"><input type="checkbox" checked={ex.technique === 'myo-match'} onChange={e => onPatch({ technique: e.target.checked ? 'myo-match' : undefined })} style={{ width: 22, height: 22 }} /> Myo-rep match</label>
+      </div>
       <p className="tiny muted">Leave starting weight empty and you'll pick it in your first session. The step pre-fills weight increases (e.g. +5 on a pin-loaded stack).</p>
       <div className="field"><label>Machine / equipment note</label><input className="input" placeholder="e.g. Hammer Strength, seat 4" value={ex.machineNote ?? ''} onChange={e => onPatch({ machineNote: e.target.value || undefined })} /></div>
     </div>

@@ -8,10 +8,22 @@ export type Muscle =
   | 'chest' | 'back' | 'side-delts' | 'rear-delts' | 'front-delts' | 'biceps' | 'triceps'
   | 'quads' | 'hamstrings' | 'glutes' | 'calves' | 'abs' | 'traps' | 'forearms';
 
+/**
+ * How load works: 'weighted' = the number is the load; 'assisted' = the number is assistance
+ * (lower is progress); 'bodyweight' = the number is extra load on a belt/held (0 = bodyweight).
+ */
+export type LoadKind = 'weighted' | 'assisted' | 'bodyweight';
+/** 'straight' = normal sets; 'myo-match' = set 1 to failure, later sets rest-pause to match it. */
+export type Technique = 'straight' | 'myo-match';
+export type CableStation = 'small' | 'big';
+
 export interface Exercise {
   id: string;
   name: string;
   custom?: boolean;
+  kind?: LoadKind;
+  /** For assisted exercises: the bodyweight version it graduates to at zero assistance. */
+  graduatesTo?: string;
   /** Muscles worked: primary count as 1 set, secondary as half a set. */
   primary?: Muscle[];
   secondary?: Muscle[];
@@ -29,6 +41,13 @@ export interface TemplateExercise {
   warmupSets?: number;
   /** Smallest weight jump on this machine/implement (kg), used to pre-fill weight increases. */
   increment?: number;
+  technique?: Technique;
+  /** Done on a cable stack: choose big or small station in the workout (separate weights). */
+  cable?: boolean;
+  /** Default station for cable exercises. */
+  station?: CableStation;
+  /** Last logged numbers from before the app, used until real history exists. */
+  seed?: { weight: number; reps: number[] };
 }
 
 export interface WorkoutTemplate {
@@ -69,6 +88,11 @@ export interface LoggedExercise {
   skipped: boolean;
   /** Logged during the return-to-training ramp: progress two reps at a time. */
   ramp?: boolean;
+  technique?: Technique;
+  station?: CableStation;
+  kind?: LoadKind;
+  /** Moved here from another day this week (exercise swap). */
+  swappedFrom?: string;
   sets: LoggedSet[];
 }
 
@@ -82,6 +106,24 @@ export interface WorkoutSession {
   deload: boolean;
   partial?: boolean;
   exercises: LoggedExercise[];
+}
+
+/** A stretch of days off plan: no training, no nagging, and scale data ignored for the trend. */
+export interface LifeEvent {
+  id: string;
+  type: 'ill' | 'away' | 'sore' | 'other';
+  from: string;
+  to: string;
+  note?: string;
+}
+
+/** One-week exercise swap: on `date`, in `templateId`, replace template exercise `replaceTeId` with `withTe`. */
+export interface ExerciseOverride {
+  date: string;
+  templateId: string;
+  replaceTeId: string;
+  withTe: TemplateExercise;
+  fromLabel: string;
 }
 
 export interface Phase {
@@ -203,5 +245,9 @@ export interface Settings {
   timerSound: boolean;
   anthropicKey?: string;
   customQuotes: string[];
+  /** Which built-in program was last loaded (to offer upgrades once). */
+  programVersion?: string;
+  /** Date the current program was loaded, for "time to specialise" advice. */
+  programLoadedOn?: string;
   onboarded: boolean;
 }
