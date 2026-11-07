@@ -1,3 +1,5 @@
+import { ACTIVITY_FACTOR, LEAN_BULK_RATE, REGAIN_RATE } from '../engine/body';
+import { KCAL_PER_KG } from '../engine/stats';
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { del, get, set } from 'idb-keyval';
@@ -49,6 +51,7 @@ export interface RestTimer {
 
 export const DEFAULT_SETTINGS: Settings = {
   units: 'kg',
+  nutritionModel: 2,
   defaultRestSec: 90,
   basis: 'first',
   minPhaseWeeks: 4,
@@ -821,6 +824,7 @@ export const useStore = create<Store>()(
         const p = (persisted ?? {}) as Partial<Data>;
         // Templates from an earlier program version pick up warm-ups and plate loading.
         if (p.templates) patchProgramTemplates(p.templates);
+        migrateNutrition(p);
         return {
           ...current, ...p,
           circumferences: p.circumferences ?? [],
@@ -833,6 +837,29 @@ export const useStore = create<Store>()(
     },
   ),
 );
+
+/**
+ * Nutrition model 2: lean bulks at 0.3/0.2 kg a week (was 0.35/0.25), a lower starting maintenance
+ * guess (activity ×1.45, was ×1.55) and protein at 1g/lb. Rewrites the active phase and any targets
+ * that were still based on the old starting guess; targets learned from your own data are kept.
+ */
+function migrateNutrition(p: Partial<Data>) {
+  if (!p.settings || (p.settings.nutritionModel ?? 1) >= 2) return;
+  p.settings.nutritionModel = 2;
+  const active = p.nutritionPhases?.find(x => x.status === 'active');
+  if (active?.type === 'bulk') {
+    if (active.targetRate === 0.35) active.targetRate = REGAIN_RATE;
+    else if (active.targetRate === 0.25) active.targetRate = LEAN_BULK_RATE;
+  }
+  for (const t of p.weeklyTargets ?? []) {
+    if (t.method !== 'estimate') continue;
+    t.maintenance = Math.round((t.maintenance * ACTIVITY_FACTOR) / 1.55 / 10) * 10;
+    const rate = active?.targetRate ?? 0;
+    t.kcal = Math.round((t.maintenance + (rate * KCAL_PER_KG) / 7) / 25) * 25;
+    if (active?.type !== 'cut') t.protein = Math.round((t.protein / 2.0) * 2.2 / 5) * 5;
+    t.note = 'Starting estimate from your lean mass, set on the low side for a lean bulk. Log calories most days and this gets personal within 3 weeks.';
+  }
+}
 
 function pickData(s: Data): Data {
   return {

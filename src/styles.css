@@ -115,17 +115,17 @@ textarea.input { padding: 12px 14px; min-height: 80px; }
 .reason { padding: 10px 16px; font-size: 14px; background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .banner { padding: 12px 16px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .banner.flag { background: var(--warn); }
-.set-row { display: grid; grid-template-columns: 36px 1fr auto 56px; align-items: center; gap: 8px; padding: 8px 12px 8px 16px; border-top: 1px solid var(--border); }
+.set-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 50px; align-items: center; gap: 6px; padding: 8px 10px 8px 12px; border-top: 1px solid var(--border); }
 .set-row:first-child { border-top: 0; }
 .set-row.done { background: rgba(198, 244, 50, 0.07); }
 .set-row.warmup .set-idx { color: var(--warn); }
 .set-idx { font-weight: 800; color: var(--muted); font-size: 15px; }
-.set-w { font-size: 14px; color: var(--muted); background: none; border: 0; text-align: left; padding: 4px 0; }
+.set-w { font-size: 13px; line-height: 1.25; color: var(--muted); background: none; border: 0; text-align: left; padding: 4px 0; min-width: 0; overflow-wrap: anywhere; }
 .set-w b { color: var(--text); font-size: 17px; }
 .stepper { display: flex; align-items: center; gap: 4px; }
-.stepper button { width: 44px; height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); font-size: 22px; font-weight: 700; }
-.stepper input { width: 52px; height: 48px; text-align: center; font-size: 22px; font-weight: 800; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
-.check { width: 56px; height: 52px; border-radius: 14px; border: 2px solid var(--border); background: var(--surface-2); font-size: 24px; font-weight: 900; color: var(--muted); }
+.stepper button { width: 40px; height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); font-size: 22px; font-weight: 700; }
+.stepper input { width: 46px; height: 48px; text-align: center; font-size: 22px; font-weight: 800; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.check { width: 50px; height: 52px; border-radius: 14px; border: 2px solid var(--border); background: var(--surface-2); font-size: 24px; font-weight: 900; color: var(--muted); }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .ex-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 

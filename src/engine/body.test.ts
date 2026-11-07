@@ -51,8 +51,8 @@ describe('muscle memory', () => {
   it('bulks faster while below previous peak lean mass', () => {
     const peak = peakLean(profile)!;
     expect(peak).toBeCloseTo(69.72, 1);
-    expect(bulkRate(63.6, peak)).toMatchObject({ rate: 0.35, regaining: true });
-    expect(bulkRate(70, peak)).toMatchObject({ rate: 0.25, regaining: false });
+    expect(bulkRate(63.6, peak)).toMatchObject({ rate: 0.3, regaining: true });
+    expect(bulkRate(70, peak)).toMatchObject({ rate: 0.2, regaining: false });
   });
 });
 
@@ -85,8 +85,7 @@ describe('roadmap', () => {
 
 describe('nutrition targets', () => {
   it('starting estimate from lean mass', () => {
-    expect(estimatedMaintenance(63.6)).toBeGreaterThan(2500);
-    expect(estimatedMaintenance(63.6)).toBeLessThan(2900);
+    expect(estimatedMaintenance(63.6)).toBe(2530);
   });
 
   it('adaptive maintenance: flat weight on 2600 kcal means maintenance ≈ 2600', () => {
@@ -102,7 +101,7 @@ describe('nutrition targets', () => {
     const t = nextTargets({ phase: { type: 'bulk', targetRate: 0.35 }, comp, checkIns: series(21, 74, 0, 2600), today: TODAY, weekStart: addDays(TODAY, 7) });
     expect(t.method).toBe('adaptive');
     expect(t.kcal).toBeCloseTo(2600 + 385, -2);
-    expect(t.protein).toBe(150);
+    expect(t.protein).toBe(165);
   });
 
   it('falls back to steering by the scale when calories are not logged', () => {
@@ -115,7 +114,8 @@ describe('nutrition targets', () => {
   });
 
   it('protein: 2g/kg in a bulk, 2.2g/kg in a cut', () => {
-    expect(proteinTarget(74, 'bulk')).toBe(150);
+    // 1g per lb: 74kg = 163lb → 165g.
+    expect(proteinTarget(74, 'bulk')).toBe(165);
     expect(proteinTarget(80, 'cut')).toBe(175);
   });
 

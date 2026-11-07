@@ -57,6 +57,13 @@ export function fmtRateW(kgPerWeek: number, units: 'kg' | 'lb'): string {
 }
 
 /** Load as the user thinks of it: plain weight, assistance, or bodyweight plus belt. */
+/** Short load for tight spaces like a set row: the number, plus a tag for belt/assist. */
+export function fmtLoadShort(kg: number, kind: 'weighted' | 'assisted' | 'bodyweight' | undefined, units: Units): { main: string; tag?: string } {
+  if (kind === 'bodyweight') return kg > 0 ? { main: `+${fmtW(kg, units)}`, tag: 'belt' } : { main: 'BW' };
+  if (kind === 'assisted') return kg > 0 ? { main: fmtW(kg, units), tag: 'assist' } : { main: 'BW' };
+  return { main: fmtW(kg, units) };
+}
+
 export function fmtLoad(kg: number, kind: 'weighted' | 'assisted' | 'bodyweight' | undefined, units: Units): string {
   if (kind === 'bodyweight') return kg > 0 ? `BW + ${fmtW(kg, units)}` : 'Bodyweight';
   if (kind === 'assisted') return kg > 0 ? `${fmtW(kg, units)} assist` : 'Bodyweight';

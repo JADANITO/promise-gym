@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackHistory, useStore, type ActiveExercise } from '../data/store';
 import type { CableStation, LoggedSet } from '../types';
 import { ExercisePicker, NumberField, Sheet, WeightInput } from '../components/ui';
-import { fmtClock, fmtDuration, fmtLoad, fmtW, uid } from '../format';
+import { fmtClock, fmtDuration, fmtLoad, fmtLoadShort, fmtW, uid } from '../format';
 import { beep, notify, unlockAudio, vibrate } from '../alerts';
 import { loadingText } from '../engine/warmup';
 import { SUPERSET_SWITCH_SEC } from '../engine/timecut';
@@ -234,7 +234,8 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
                   {s.rpe != null && <div className="tiny muted">@{s.rpe}</div>}
                 </button>
                 <button className="set-w num" onClick={() => setSheet({ setId: s.id })}>
-                  <b>{pickWeight && !s.warmup ? '—' : load(s.weight)}</b><br />
+                  <b>{pickWeight && !s.warmup ? '—' : fmtLoadShort(s.weight, kind, units).main}</b><br />
+                  {!s.warmup && fmtLoadShort(s.weight, kind, units).tag && <>{fmtLoadShort(s.weight, kind, units).tag} · </>}
                   {s.warmup ? `warm-up × ${s.targetReps}` : `${isMatch ? 'match' : 'target'} ${s.targetReps}`}
                   {s.warmup && ex.source.loading && <span className="tiny" style={{ display: 'block' }}>{loadingText(s.weight, ex.source.loading, barKg)}</span>}
                 </button>

@@ -15,8 +15,13 @@ export const REGAIN_LEAN_SHARE = 0.7;
 export const NEW_LEAN_SHARE = 0.5;
 /** Share of weight lost on a lean cut (high protein, lifting) that is fat. */
 export const CUT_FAT_SHARE = 0.85;
-export const REGAIN_RATE = 0.35;
-export const LEAN_BULK_RATE = 0.25;
+/** Lean bulk speeds: ~0.4% bodyweight/week while regaining old muscle, ~0.25% for brand-new muscle. */
+export const REGAIN_RATE = 0.3;
+export const LEAN_BULK_RATE = 0.2;
+/** Activity multiplier for the starting guess: 5 lifting sessions, otherwise fairly ordinary days.
+ * Deliberately on the low side — the scale pushes it up within 2–3 weeks if it's short, which costs
+ * nothing, whereas starting high on a bulk just adds fat. */
+export const ACTIVITY_FACTOR = 1.45;
 export const CUT_RATE_PCT = 0.005;
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -201,7 +206,7 @@ export function simulateRoadmap(
 
 /** Katch–McArdle BMR × activity for ~5 lifting sessions a week. A starting guess until real data arrives. */
 export function estimatedMaintenance(lean: number): number {
-  return Math.round(((370 + 21.6 * lean) * 1.55) / 10) * 10;
+  return Math.round(((370 + 21.6 * lean) * ACTIVITY_FACTOR) / 10) * 10;
 }
 
 /** Real maintenance from intake vs weight trend over the last 3 weeks. Null until there's enough data. */
@@ -215,8 +220,9 @@ export function adaptiveMaintenance(checkIns: DailyCheckIn[], today: string, day
   return Math.round(mean(kc.map(p => p.value))! - slope * KCAL_PER_KG);
 }
 
-export function proteinTarget(weight: number, type: NutritionPhaseType): number {
-  return Math.round((weight * (type === 'cut' ? 2.2 : 2.0)) / 5) * 5;
+/** 1g per lb of bodyweight (2.2g/kg) in every phase. */
+export function proteinTarget(weight: number, _type?: NutritionPhaseType): number {
+  return Math.round((weight * 2.2) / 5) * 5;
 }
 
 /** Next week's calorie and protein targets. */
@@ -250,7 +256,7 @@ export function nextTargets(input: {
   } else {
     maintenance = previous?.maintenance ?? estimatedMaintenance(comp.lean);
     method = 'estimate';
-    note = 'Starting estimate from your lean mass. Log calories most days and this gets personal within 3 weeks.';
+    note = 'Starting estimate from your lean mass, set on the low side for a lean bulk. Log calories most days and this gets personal within 3 weeks.';
   }
   const kcal = Math.round((maintenance + surplus) / 25) * 25;
   return { weekStart, kcal, protein: proteinTarget(comp.weight, phase.type), maintenance, method, note };

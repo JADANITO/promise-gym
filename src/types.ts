@@ -264,6 +264,8 @@ export interface Settings {
   customQuotes: string[];
   /** Which built-in program was last loaded (to offer upgrades once). */
   programVersion?: string;
+  /** Version of the calorie/protein rules the stored targets were made with. */
+  nutritionModel?: number;
   /** Date the current program was loaded, for "time to specialise" advice. */
   programLoadedOn?: string;
   /** Olympic bar weight for the plate calculator. */
