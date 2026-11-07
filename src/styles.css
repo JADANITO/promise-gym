@@ -127,6 +127,47 @@ textarea.input { padding: 12px 14px; min-height: 80px; }
 .stepper input { width: 46px; height: 48px; text-align: center; font-size: 22px; font-weight: 800; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
 .check { width: 50px; height: 52px; border-radius: 14px; border: 2px solid var(--border); background: var(--surface-2); font-size: 24px; font-weight: 900; color: var(--muted); }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+/* Logbook layout: last week beside today, warm-ups in their own amber box, finished work folds away. */
+.lb-title { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lb-title .ex-name { min-width: 0; }
+.lb-range { flex: none; max-width: 50%; text-align: right; }
+.ex-head { display: flex; flex-direction: column; gap: 4px; }
+.lb-row { display: grid; grid-template-columns: 24px 40px minmax(0, 1fr) auto 46px; align-items: center; gap: 6px; padding: 6px 10px 6px 12px; border-top: 1px solid var(--border); }
+.lb-row.done { background: rgba(198, 244, 50, 0.07); }
+.lb-thead { border-top: 0; padding-top: 8px; padding-bottom: 2px; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.lb-idx, .lb-last, .lb-target { background: none; border: 0; padding: 4px 0; text-align: left; min-width: 0; }
+.lb-idx { font-weight: 800; color: var(--muted); font-size: 15px; }
+.lb-last { color: var(--muted); font-size: 15px; line-height: 1.15; }
+.lb-last small { display: block; font-size: 10.5px; }
+.lb-target { line-height: 1.15; }
+.lb-target b { display: block; font-size: 18px; }
+.lb-target span { display: block; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.lb-target span.beat { color: var(--good); font-weight: 800; font-size: 12px; }
+.lb-row .stepper { gap: 3px; }
+.lb-row .stepper button { width: 36px; height: 44px; font-size: 20px; border-radius: 11px; }
+.lb-row .stepper input { width: 42px; height: 44px; font-size: 19px; border-radius: 11px; }
+.lb-row .check { width: 46px; height: 46px; font-size: 20px; border-radius: 13px; }
+.wu-box { margin: 10px 12px 4px; background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.35); border-radius: 12px; padding: 6px 10px; }
+.wu-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 2px; }
+.wu-top b { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--warn); }
+.wu-top span { font-size: 11.5px; color: var(--muted); }
+.wu-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 44px; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid rgba(255, 181, 71, 0.18); }
+.wu-idx { background: none; border: 0; padding: 0; text-align: left; color: var(--warn); font-weight: 900; font-size: 13px; }
+.wu-what { background: none; border: 0; padding: 2px 0; text-align: left; min-width: 0; }
+.wu-what b { font-size: 15px; }
+.wu-what span { display: block; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.check.wu { width: 44px; height: 42px; font-size: 18px; border-radius: 12px; }
+.check.wu.on { background: var(--warn); border-color: var(--warn); color: var(--accent-ink); }
+.wu-done { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: calc(100% - 24px); margin: 10px 12px 4px; background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.35); border-radius: 12px; padding: 9px 10px; text-align: left; font-size: 13px; }
+.wu-done b { color: var(--warn); }
+.link-btn { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; font-size: inherit; }
+.ex-done { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; text-align: left; border-color: rgba(198, 244, 50, 0.35); }
+.ex-check { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 900; font-size: 15px; }
+.ex-text { min-width: 0; }
+.ex-text b { display: block; font-size: 16px; }
+.ex-text span { font-size: 13px; color: var(--muted); }
+.ex-beat { text-align: right; font-size: 13px; font-weight: 800; color: var(--good); line-height: 1.25; }
+.ex-beat span { font-weight: 600; font-size: 11px; color: var(--muted); }
 .ex-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 
 .timer-bar {

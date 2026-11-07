@@ -52,7 +52,8 @@ export function loadingText(weight: number, loading: Loading | undefined, barKg 
   const perSide = loading === 'barbell' ? (weight - barKg) / 2 : weight;
   if (perSide < 0) return `Lighter than the ${barKg}kg bar`;
   const { plates, leftover } = platesPerSide(perSide);
-  const side = plates.length ? `${plates.join(' + ')} each side` : 'no plates';
   const extra = leftover > 0 ? ` (+${leftover} that standard plates can't make)` : '';
+  if (!plates.length) return loading === 'barbell' ? `Bar only (${barKg}kg)${extra}` : `No plates${extra}`;
+  const side = `${plates.join(' + ')} each side`;
   return loading === 'barbell' ? `${barKg}kg bar + ${side}${extra}` : `${side}${extra}`;
 }

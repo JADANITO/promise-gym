@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackHistory, useStore, type ActiveExercise } from '../data/store';
-import type { CableStation, LoggedSet } from '../types';
+import type { CableStation, LoggedSet, WorkoutSession } from '../types';
 import { ExercisePicker, NumberField, Sheet, WeightInput } from '../components/ui';
 import { fmtClock, fmtDuration, fmtLoad, fmtLoadShort, fmtW, uid } from '../format';
 import { beep, notify, unlockAudio, vibrate } from '../alerts';
@@ -18,6 +18,11 @@ export function ActiveWorkout({ go }: { go: (r: string) => void }) {
   const [short, setShort] = useState(false);
   const [now, setNow] = useState(Date.now());
   const minutesLeft = useStore(s => (s.active ? s.minutesLeft() : 0));
+  const sessions = useStore(s => s.sessions);
+  const beaten = useMemo(() => (active ? active.session.exercises.reduce((n, e) => {
+    const last = lastTimeOf(sessions, e);
+    return n + e.sets.filter(x => !x.warmup).filter((x, i) => x.completed && beatBy(e, x, last, i) != null).length;
+  }, 0) : 0), [active, sessions]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
@@ -47,7 +52,7 @@ export function ActiveWorkout({ go }: { go: (r: string) => void }) {
           <div className="row small muted">
             {session.deload && <span className="pill deload">DELOAD</span>}
             {active.holdTargets && <span className="pill warn">Repeating last targets</span>}
-            <span>{fmtDuration(now - session.startedAt)} · {remainingSets} sets · ~{minutesLeft} min left</span>
+            <span>{fmtDuration(now - session.startedAt)} · {remainingSets} sets · ~{minutesLeft} min left{beaten > 0 ? ` · beat last week on ${beaten}` : ''}</span>
           </div>
         </div>
         <button className="btn primary sm" onClick={() => setFinishing(true)}>Finish</button>
@@ -81,15 +86,36 @@ function AddWeightSheet({ exerciseId, onClose, onAdd }: { exerciseId: string | n
   );
 }
 
+type LastTime = { weight: number; reps: number[]; deload?: boolean; before: boolean } | null;
+
+/** Last session's working sets on this exercise (same station and rep range). */
+function lastTimeOf(sessions: WorkoutSession[], ex: ActiveExercise): LastTime {
+  const track = trackHistory(sessions, ex.source, ex.station);
+  const last = track.sessions[track.sessions.length - 1];
+  const le = last?.exercises[last.exercises.length - 1];
+  const ws = le?.sets.filter(x => !x.warmup && x.completed) ?? [];
+  return le && ws.length ? { weight: le.workingWeight, reps: ws.map(x => x.reps), deload: last.deload, before: !track.real } : null;
+}
+
 function useLastTime(ex: ActiveExercise) {
   const sessions = useStore(s => s.sessions);
-  return useMemo(() => {
-    const track = trackHistory(sessions, ex.source, ex.station);
-    const last = track.sessions[track.sessions.length - 1];
-    const le = last?.exercises[last.exercises.length - 1];
-    const ws = le?.sets.filter(x => !x.warmup && x.completed) ?? [];
-    return le && ws.length ? { weight: le.workingWeight, reps: ws.map(x => x.reps), deload: last.deload, before: !track.real } : null;
-  }, [sessions, ex.source, ex.station]);
+  return useMemo(() => lastTimeOf(sessions, ex), [sessions, ex]);
+}
+
+/** +1 heavier than last time, 0 the same, −1 lighter (less assistance counts as heavier). */
+function loadVs(kind: string, today: number, last: number): number {
+  const d = Math.round((today - last) * 100);
+  if (d === 0) return 0;
+  return (kind === 'assisted' ? -d : d) > 0 ? 1 : -1;
+}
+
+/** How a logged set beat the same set last week: '↑' for a heavier load, '+N' for more reps, null otherwise. */
+function beatBy(ex: ActiveExercise, set: LoggedSet, last: LastTime, i: number): string | null {
+  if (!last || last.deload || last.reps[i] == null) return null;
+  const vs = loadVs(ex.kind ?? 'weighted', set.weight, last.weight);
+  if (vs > 0) return '↑';
+  if (vs === 0 && set.reps > last.reps[i]) return `+${set.reps - last.reps[i]}`;
+  return null;
 }
 
 function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
@@ -121,6 +147,12 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
   const barKg = useStore(s => s.settings.barKg ?? 20);
   const partner = useStore(s => (ex.pairWith ? s.active?.session.exercises.find(e => e.id === ex.pairWith) : undefined));
   const plates = pickWeight ? null : loadingText(ex.workingWeight, ex.source.loading, barKg);
+  const warmups = ex.sets.filter(s => s.warmup);
+  const warmDone = warmups.length > 0 && warmups.every(s => s.completed);
+  const allDone = working.length > 0 && working.every(s => s.completed);
+  // Finished warm-ups and finished exercises fold to one line; tap to open them again.
+  const [warmOpen, setWarmOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
 
   const mutateEx = (fn: (e: ActiveExercise) => void) => update(a => {
     const e = a.session.exercises.find(x => x.id === ex.id);
@@ -131,6 +163,8 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
     unlockAudio();
     const set = ex.sets.find(s => s.id === setId)!;
     if (!completeSet(ex.id, setId)) return;
+    if (set.warmup) setWarmOpen(false);
+    else if (working.every(s => s.completed || s.id === setId)) setOpened(false);
     if (set.warmup) {
       const nextWarm = ex.sets.filter(s => s.warmup && !s.completed && s.id !== setId).length;
       startTimer(nextWarm ? 45 : 90, nextWarm ? `${title} · next warm-up` : `${title} · warm-ups done — first working set next`);
@@ -150,7 +184,10 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
       return;
     }
     const next = working[idx];
-    const after = next ? ` · next: ${myo ? 'match' : 'aim for'} ${useStore.getState().active?.session.exercises.find(e => e.id === ex.id)?.sets.find(s => s.id === next.id)?.targetReps ?? next.targetReps}` : '';
+    const list = useStore.getState().active?.session.exercises ?? [];
+    const upNext = list.slice(list.findIndex(e => e.id === ex.id) + 1).find(e => !e.skipped && e.sets.some(s => !s.warmup && !s.completed));
+    const after = next ? ` · next: ${myo ? 'match' : 'aim for'} ${list.find(e => e.id === ex.id)?.sets.find(s => s.id === next.id)?.targetReps ?? next.targetReps}`
+      : upNext ? ` · next up: ${name(upNext.exerciseId)}` : '';
     startTimer(ex.restSec, `${title} · set ${idx} done${after}`);
   };
   const setReps = (setId: string, fn: (r: number) => number) => {
@@ -164,25 +201,42 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
       ? 'You hit the top of your range last time, so add weight with the belt today.'
       : 'You hit the top of your range last time, so increase the weight today.';
 
+  const beats = working.map((s, i) => (s.completed ? beatBy(ex, s, last, i) : null));
+  if (allDone && !opened && !ex.skipped) {
+    const lastSame = last && !last.deload && loadVs(kind, ex.workingWeight, last.weight) === 0;
+    const repGain = lastSame ? working.reduce((d, s, i) => d + s.reps - (last!.reps[i] ?? s.reps), 0) : 0;
+    const summary = last && !last.deload && loadVs(kind, ex.workingWeight, last.weight) > 0 ? 'New weight' : repGain > 0 ? `+${repGain} rep${repGain > 1 ? 's' : ''}` : null;
+    return (
+      <button className={`card ex-done ${deload ? 'deload' : ''}`} onClick={() => setOpened(true)} aria-label={`${title} done. Open it`}>
+        <span className="ex-check" aria-hidden>✓</span>
+        <span className="ex-text">
+          <b>{title}</b>
+          <span className="num">{working.map(s => s.reps).join(' · ')} at {load(ex.workingWeight)}</span>
+        </span>
+        {summary && <span className="ex-beat num">{summary}<br /><span>vs last week</span></span>}
+      </button>
+    );
+  }
+
   let n = 0;
   return (
     <div className={`card ex-card ${deload ? 'deload' : ''} ${ex.skipped ? 'muted' : ''}`} style={ex.skipped ? { opacity: 0.55 } : undefined}>
       <div className="ex-head">
-        <div className="row between">
-          <h2 className="ex-name grow">{title}</h2>
-          {ex.skipped && <span className="pill">Skipped</span>}
+        <div className="lb-title">
+          <h2 className="ex-name">{title}</h2>
+          {allDone && opened ? <button className="btn sm ghost" onClick={() => setOpened(false)}>Fold</button>
+            : <span className="muted small num lb-range">{ex.repMin}–{ex.repMax} · {pickWeight ? 'pick a weight' : load(ex.workingWeight)}</span>}
         </div>
         {ex.machineNote && <p className="muted small">{ex.machineNote}</p>}
+        {plates && <p className="small"><b>Load:</b> {plates}</p>}
         <div className="ex-meta">
-          <span className="pill accent num">{pickWeight ? 'Pick a weight' : load(ex.workingWeight)}</span>
-          <span className="pill num">Set 1: {ex.targetReps} reps · Range {ex.repMin}–{ex.repMax}</span>
+          {ex.skipped && <span className="pill">Skipped</span>}
           <span className="pill num">Rest {fmtClock(ex.restSec)}</span>
           {myo && <span className="pill">Myo-rep match</span>}
           {partner && <span className="pill accent">Superset with {name(partner.exerciseId)}</span>}
           {ex.swappedFrom && <span className="pill warn">From {ex.swappedFrom}</span>}
           {!ex.countsForProgression && <span className="pill warn">One-off weight</span>}
         </div>
-        {plates && <p className="small mt"><b>Load:</b> {plates}</p>}
         {ex.station && (
           <div className="row mt" role="group" aria-label="Cable station">
             <span className="small muted">Cable:</span>
@@ -193,11 +247,6 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
               }}>{st === 'small' ? 'Small' : 'Big'}</button>
             ))}
           </div>
-        )}
-        {last && (
-          <p className="muted small mt num">
-            {last.before ? 'Before the app' : 'Last'}: {load(last.weight)} × {last.reps.join(', ')}{last.deload ? ' (deload)' : ''}
-          </p>
         )}
       </div>
 
@@ -222,22 +271,54 @@ function ExerciseCard({ ex, deload }: { ex: ActiveExercise; deload: boolean }) {
         <div className="banner flag small">Stuck below your range for 2+ sessions. Consider dropping the weight 5–10% — see the Coach tab.</div>
       )}
 
+      {!ex.skipped && warmups.length > 0 && (warmDone && !warmOpen ? (
+        <button className="wu-done" onClick={() => setWarmOpen(true)}>
+          <span><b>✓ Warm-up done</b> <span className="muted num">{warmups.map(s => fmtLoadShort(s.weight, kind, units).main.replace(/kg$/, '')).join(' · ')}</span></span>
+          <span className="muted small" style={{ textDecoration: 'underline' }}>Show</span>
+        </button>
+      ) : (
+        <div className="wu-box">
+          <div className="wu-top">
+            <b>Warm-up</b>
+            <span className="num">{warmups.filter(s => s.completed).length}/{warmups.length} · not counted{warmDone && <> · <button className="link-btn" onClick={() => setWarmOpen(false)}>Hide</button></>}</span>
+          </div>
+          {warmups.map((s, k) => (
+            <div key={s.id} className="wu-row">
+              <button className="wu-idx" aria-label="Warm-up set details" onClick={() => setSheet({ setId: s.id })}>W{k + 1}</button>
+              <button className="wu-what num" onClick={() => setSheet({ setId: s.id })}>
+                <b>{fmtLoadShort(s.weight, kind, units).main} × {s.targetReps}</b>
+                {ex.source.loading && <span>{loadingText(s.weight, ex.source.loading, barKg)}</span>}
+              </button>
+              <button className={`check wu ${s.completed ? 'on' : ''}`} aria-label={s.completed ? 'Mark warm-up not done' : 'Mark warm-up done'} aria-pressed={s.completed} onClick={() => toggle(s.id)}>✓</button>
+            </div>
+          ))}
+        </div>
+      ))}
+
       {!ex.skipped && (
         <div>
-          {ex.sets.map(s => {
-            if (!s.warmup) n++;
-            const isMatch = myo && !s.warmup && n > 1;
+          <div className="lb-row lb-thead" aria-hidden>
+            <span>Set</span><span>Last</span><span>Target</span><span style={{ textAlign: 'center' }}>Reps</span><span />
+          </div>
+          {working.map((s, i) => {
+            n++;
+            const isMatch = myo && n > 1;
+            const lr = last?.reps[i];
+            const lastDiffW = last && loadVs(kind, s.weight, last.weight) !== 0;
+            const tag = fmtLoadShort(s.weight, kind, units);
             return (
-              <div key={s.id} className={`set-row ${s.completed ? 'done' : ''} ${s.warmup ? 'warmup' : ''}`}>
-                <button className="set-idx" style={{ background: 'none', border: 0, padding: 0 }} aria-label="Set details" onClick={() => setSheet({ setId: s.id })}>
-                  {s.warmup ? 'W' : n}
-                  {s.rpe != null && <div className="tiny muted">@{s.rpe}</div>}
+              <div key={s.id} className={`lb-row ${s.completed ? 'done' : ''}`}>
+                <button className="lb-idx" aria-label="Set details" onClick={() => setSheet({ setId: s.id })}>
+                  {n}
+                  {s.rpe != null && <span className="tiny muted" style={{ display: 'block' }}>@{s.rpe}</span>}
                 </button>
-                <button className="set-w num" onClick={() => setSheet({ setId: s.id })}>
-                  <b>{pickWeight && !s.warmup ? '—' : fmtLoadShort(s.weight, kind, units).main}</b><br />
-                  {!s.warmup && fmtLoadShort(s.weight, kind, units).tag && <>{fmtLoadShort(s.weight, kind, units).tag} · </>}
-                  {s.warmup ? `warm-up × ${s.targetReps}` : `${isMatch ? 'match' : 'target'} ${s.targetReps}`}
-                  {s.warmup && ex.source.loading && <span className="tiny" style={{ display: 'block' }}>{loadingText(s.weight, ex.source.loading, barKg)}</span>}
+                <button className="lb-last num" onClick={() => setSheet({ setId: s.id })} aria-label="Set details">
+                  {lr != null ? <>{lr}{lastDiffW && <small>{fmtLoadShort(last!.weight, kind, units).main}</small>}{last!.deload && <small>deload</small>}</> : '—'}
+                </button>
+                <button className="lb-target num" onClick={() => setSheet({ setId: s.id })} aria-label="Set details">
+                  <b>{s.targetReps}</b>
+                  {beats[i] ? <span className="beat">{beats[i]}</span>
+                    : <span>{isMatch ? 'match' : (Math.abs(s.weight - ex.workingWeight) > 0.001 && !pickWeight) ? `${tag.main}${tag.tag ? ' ' + tag.tag : ''}` : 'reps'}</span>}
                 </button>
                 <div className="stepper">
                   <button aria-label="One less rep" onClick={() => setReps(s.id, r => r - 1)}>−</button>
