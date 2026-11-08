@@ -6,6 +6,9 @@ import { returningFromBreak } from '../engine/phases';
 import { fmtDuration, fmtLoad, fmtW } from '../format';
 import type { TemplateExercise, WorkoutSession } from '../types';
 
+// Jaden's planner. Finishing a workout here ticks gym there: one tap, no server, the link carries the date.
+const REBUILD_WEEK = 'https://claude.ai/artifact/JuTHHVCBrQcZ2ev4UWr3dq';
+
 /** Decides whether to ask about repeating targets after a break, then starts the workout. */
 export function StartWorkout({ templateId, go }: { templateId: string; go: (r: string) => void }) {
   const sessions = useStore(s => s.sessions);
@@ -86,7 +89,10 @@ export function Summary({ id, go }: { id: string; go: (r: string) => void }) {
           </div>
         ))}
       </div>
-      <button className="btn primary block big" onClick={() => go('home')}>Done</button>
+      {/* Rebuild Week counts this as that day's gym when it opens with #gym-YYYY-MM-DD. */}
+      <a className="btn primary block big" href={`${REBUILD_WEEK}#gym-${ymd(session.startedAt)}`} target="_blank" rel="noopener"
+        style={{ textDecoration: 'none' }} onClick={() => go('home')}>✓ Tick gym in Rebuild Week</a>
+      <button className="btn block" onClick={() => go('home')}>Done</button>
     </div>
   );
 }
