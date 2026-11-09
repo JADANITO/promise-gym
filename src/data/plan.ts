@@ -32,7 +32,10 @@ export function ensureWeeklyTargets(s: Store, today = ymd()) {
 
 /** The Sunday check-in is due on Sundays (and Monday as a catch-up) if not done in the last 5 days. */
 export function weeklyCheckInDue(s: Store, today = ymd()): boolean {
-  if (!s.currentNutritionPhase()) return false;
+  const phase = s.currentNutritionPhase();
+  if (!phase) return false;
+  // No check-in in the first 6 days of a phase: there's nothing to review yet.
+  if (daysBetween(phase.startDate, today) < 6) return false;
   const dow = parseYmd(today).getDay();
   const recent = s.weeklyCheckIns.some(w => w.date > addDays(today, -5));
   if (recent) return false;

@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../data/store';
-import { NumberField, WeightInput } from '../components/ui';
+import { LengthInput, NumberField, WeightInput } from '../components/ui';
 import { download, notificationsSupported, reminderIcs, requestNotifications } from '../alerts';
 import { addDays, ymd } from '../engine/dates';
 import { DAY_NAMES } from '../engine/schedule';
 import { PHASE_LABEL, planSnapshot } from '../data/plan';
 import { rateFor } from '../engine/body';
 import { backupToGist, restoreFromGist } from '../data/backup';
-import { fmtRateW } from '../format';
+import { fmtLen, fmtRateW } from '../format';
 import type { LengthUnits, NutritionPhaseType, ProgressionBasis, Units } from '../types';
 import { PlateauSheet } from './Home';
 
@@ -20,6 +20,8 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
   const set = s.setSettings;
   const p = s.profile;
   const [quote, setQuote] = useState('');
+  const [waistFix, setWaistFix] = useState<number | undefined>();
+  const [restartAsk, setRestartAsk] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [deloadOpen, setDeloadOpen] = useState(false);
   const [bfNow, setBfNow] = useState<number | undefined>();
@@ -100,6 +102,19 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
           </div>
           <p className="tiny muted">Uses today's weight trend and your latest waist measurement.</p>
         </div>
+        {p.baseline && (
+          <div className="field">
+            <label>Starting waist (fix a wrong first measurement)</label>
+            <div className="row">
+              <div className="grow"><LengthInput cm={waistFix ?? p.baseline.waistCm} onChange={setWaistFix} /></div>
+              <button className="btn" disabled={waistFix == null || Math.abs(waistFix - p.baseline.waistCm) < 0.01} onClick={() => {
+                s.correctStartingWaist(waistFix!);
+                setWaistFix(undefined); setMsg(`Starting waist set to ${fmtLen(waistFix!, st.lengthUnits)} ✓`);
+              }}>Save</button>
+            </div>
+            <p className="tiny muted">Replaces what you entered at setup ({fmtLen(p.baseline.waistCm, st.lengthUnits)}), so check-ins compare against the right number. Your body fat estimate stays at {p.baseline.bodyFat}% for this waist.</p>
+          </div>
+        )}
         <button className="btn" onClick={() => go('setup')}>Redo PT intake & plan</button>
       </div>
 
@@ -118,6 +133,17 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
           Return-to-training ramp {st.rampUntil && st.rampUntil >= today ? `(until ${st.rampUntil})` : '(3 weeks of +2 rep jumps)'}
         </label>
         <p className="tiny muted">The PT switches phases at your Sunday check-in. Use these only to override.</p>
+        {plan.phase && (restartAsk ? (
+          <div className="card tight stack" style={{ gap: 8 }}>
+            <p className="small">Make today day 1 of week 1? Your {PHASE_LABEL[plan.phase.type].toLowerCase()}, training block and program all restart today, the return-to-training weeks start again, and your first Sunday check-in is next Sunday. Logged workouts, weights and food stay.</p>
+            <div className="row">
+              <button className="btn primary grow" onClick={() => { s.restartFromToday(); setRestartAsk(false); setMsg('Week 1 starts today ✓'); }}>Yes, start today</button>
+              <button className="btn grow" onClick={() => setRestartAsk(false)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn" onClick={() => setRestartAsk(true)}>Start week 1 today</button>
+        ))}
       </div>
 
       <h2 className="section-title">Training split</h2>

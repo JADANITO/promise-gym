@@ -146,6 +146,10 @@ interface Actions {
   currentPhase: () => Phase | undefined;
   // body & plan
   setProfile: (p: Partial<Profile>) => void;
+  /** Fix the waist entered at setup. Body fat stays calibrated to the same % at the corrected waist. */
+  correctStartingWaist: (waistCm: number) => void;
+  /** Make today day 1 of week 1: the current nutrition phase, training block and program restart today. */
+  restartFromToday: () => void;
   currentNutritionPhase: () => NutritionPhase | undefined;
   startNutritionPhase: (type: NutritionPhaseType, targetRate: number, reason: string, startWeight?: number, startWaistCm?: number) => void;
   addMeasurement: (m: Measurement) => void;
@@ -709,6 +713,26 @@ export const useStore = create<Store>()(
         }),
 
         setProfile: p => mutate(d => { d.profile = { ...d.profile, ...p }; }),
+        correctStartingWaist: waistCm => mutate(d => {
+          const old = d.profile.baseline?.waistCm;
+          if (d.profile.baseline) d.profile.baseline = { ...d.profile.baseline, waistCm };
+          const date = d.profile.baseline?.date;
+          // The setup measurement takes the corrected value; later check-ins are left alone.
+          d.measurements = d.measurements.map(m => (m.date === date ? { ...m, waistCm } : m));
+          if (date && !d.measurements.some(m => m.date === date)) d.measurements = [...d.measurements, { date, waistCm }].sort((a, b) => a.date.localeCompare(b.date));
+          d.nutritionPhases.forEach(p => { if (p.status === 'active' && (p.startWaistCm == null || (old != null && Math.abs(p.startWaistCm - old) < 0.01))) p.startWaistCm = waistCm; });
+        }),
+        restartFromToday: () => mutate(d => {
+          const today = ymd();
+          const oldStart = d.settings.programLoadedOn;
+          d.nutritionPhases.forEach(p => { if (p.status === 'active') p.startDate = today; });
+          d.phases.forEach(p => { if (p.status === 'active') { p.startDate = today; p.lastPlateauNo = undefined; } });
+          d.settings.programLoadedOn = today;
+          d.settings.scheduleOverrides = Object.fromEntries(Object.entries(d.settings.scheduleOverrides ?? {}).filter(([date]) => date >= today));
+          d.exerciseOverrides = d.exerciseOverrides.filter(o => o.date >= today);
+          // The easy return-to-training weeks start again too, if they were still running.
+          if (d.settings.rampUntil && (d.settings.rampUntil >= today || (oldStart && d.settings.rampUntil >= oldStart))) d.settings.rampUntil = addDays(today, 21);
+        }),
         currentNutritionPhase: () => getState().nutritionPhases.find(p => p.status === 'active'),
         startNutritionPhase: (type, targetRate, reason, startWeight, startWaistCm) => mutate(d => {
           const today = ymd();

@@ -159,3 +159,27 @@ describe('warm-ups, later and short on time', () => {
     }
   });
 });
+
+describe('fixing the start', () => {
+  it('corrects the starting waist without changing the body fat estimate', () => {
+    S().setProfile({ heightCm: 181, baseline: { date: '2026-11-09', weight: 74, bodyFat: 14, waistCm: 81.28 } });
+    S().addMeasurement({ date: '2026-11-09', waistCm: 81.28 });
+    S().startNutritionPhase('bulk', 0.3, 'test', 74, 81.28);
+    S().correctStartingWaist(80.01);
+    expect(S().profile.baseline!.waistCm).toBe(80.01);
+    expect(S().measurements.find(m => m.date === '2026-11-09')!.waistCm).toBe(80.01);
+    expect(S().currentNutritionPhase()!.startWaistCm).toBe(80.01);
+    expect(S().profile.baseline!.bodyFat).toBe(14);
+  });
+
+  it('start week 1 today restarts the phase, block and program dates', () => {
+    at('2026-11-02');
+    S().startNutritionPhase('bulk', 0.3, 'test', 74);
+    S().setSettings({ rampUntil: '2026-11-23', programLoadedOn: '2026-11-02' });
+    at('2026-11-09');
+    S().restartFromToday();
+    expect(S().currentNutritionPhase()!.startDate).toBe('2026-11-09');
+    expect(S().settings.programLoadedOn).toBe('2026-11-09');
+    expect(S().settings.rampUntil).toBe('2026-11-30');
+  });
+});
