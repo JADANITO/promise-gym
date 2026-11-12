@@ -3,31 +3,57 @@
 let ctx: AudioContext | null = null;
 const ICON = `${import.meta.env.BASE_URL}icon-192.png`;
 
-/** Must be called from a user gesture once so iOS lets us play sound later. */
+/**
+ * Wakes the sound player. Phones put it to sleep when the screen locks, when music starts or stops, or after a
+ * while; asleep, a beep plays into nothing. Called on every tap (see main.tsx), which is when phones allow it.
+ */
 export function unlockAudio() {
   try {
     ctx ??= new AudioContext();
-    if (ctx.state === 'suspended') void ctx.resume();
+    if (ctx.state !== 'running') void ctx.resume().catch(() => { /* not allowed yet */ });
   } catch { /* no audio */ }
 }
 
+/** Three beeps, `delaySec` from now on the sound player's own clock. Returns the tones so they can be cancelled. */
+function tones(c: AudioContext, times: number, delaySec: number): OscillatorNode[] {
+  const start = c.currentTime + 0.05 + Math.max(0, delaySec);
+  const out: OscillatorNode[] = [];
+  for (let i = 0; i < times; i++) {
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'square';
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, start + i * 0.35);
+    g.gain.exponentialRampToValueAtTime(0.25, start + i * 0.35 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + i * 0.35 + 0.25);
+    o.connect(g).connect(c.destination);
+    o.start(start + i * 0.35);
+    o.stop(start + i * 0.35 + 0.3);
+    out.push(o);
+  }
+  return out;
+}
+
+/** Beep now. Wakes the sound player first if it fell asleep, instead of playing into nothing. */
 export function beep(times = 3) {
   try {
     ctx ??= new AudioContext();
-    const now = ctx.currentTime;
-    for (let i = 0; i < times; i++) {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = 'square';
-      o.frequency.value = 880;
-      g.gain.setValueAtTime(0.0001, now + i * 0.35);
-      g.gain.exponentialRampToValueAtTime(0.25, now + i * 0.35 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.35 + 0.25);
-      o.connect(g).connect(ctx.destination);
-      o.start(now + i * 0.35);
-      o.stop(now + i * 0.35 + 0.3);
-    }
+    const c = ctx;
+    if (c.state === 'running') { tones(c, times, 0); return; }
+    void c.resume().then(() => { tones(c, times, 0); }).catch(() => { /* not allowed without a tap */ });
   } catch { /* no audio */ }
+}
+
+/**
+ * Book the end-of-rest beep ahead, on the sound player's clock: it plays on time even when the page's own timers
+ * are slowed down. Returns a cancel function, or null if sound isn't on (the timer's own beep is the fallback).
+ */
+export function bookBeep(atMs: number, times = 3): (() => void) | null {
+  try {
+    if (!ctx || ctx.state !== 'running') return null;
+    const nodes = tones(ctx, times, (atMs - Date.now()) / 1000);
+    return () => nodes.forEach(o => { try { o.stop(); } catch { /* already stopped */ } });
+  } catch { return null; }
 }
 
 export function vibrate(pattern: number[] = [300, 150, 300, 150, 300]) {

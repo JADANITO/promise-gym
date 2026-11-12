@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../data/store';
 import { LengthInput, NumberField, WeightInput } from '../components/ui';
-import { download, notificationsSupported, reminderIcs, requestNotifications } from '../alerts';
+import { beep, download, notificationsSupported, reminderIcs, requestNotifications } from '../alerts';
 import { addDays, ymd } from '../engine/dates';
 import { DAY_NAMES } from '../engine/schedule';
 import { PHASE_LABEL, planSnapshot } from '../data/plan';
@@ -186,6 +186,8 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
         </div>
         <label className="row"><input type="checkbox" checked={st.keepAwake} onChange={e => set({ keepAwake: e.target.checked })} style={{ width: 22, height: 22 }} /> Keep screen on during workouts</label>
         <label className="row"><input type="checkbox" checked={st.timerSound} onChange={e => set({ timerSound: e.target.checked })} style={{ width: 22, height: 22 }} /> Beep when rest is over</label>
+        <button className="btn sm" onClick={() => beep()}>Test the beep</button>
+        <p className="tiny muted">No sound? On an iPhone, the ring/silent switch mutes web-app sounds: flip it to ring. Also check the volume.</p>
         {block?.type === 'gaining' && <button className="btn" onClick={() => setDeloadOpen(true)}>Start a deload week now</button>}
       </div>
 

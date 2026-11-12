@@ -3,7 +3,7 @@ import { trackHistory, useStore, type ActiveExercise } from '../data/store';
 import type { CableStation, LoggedSet, WorkoutSession } from '../types';
 import { ExercisePicker, NumberField, Sheet, WeightInput } from '../components/ui';
 import { fmtClock, fmtDuration, fmtLoad, fmtLoadShort, fmtW, uid } from '../format';
-import { beep, notify, unlockAudio, vibrate } from '../alerts';
+import { beep, bookBeep, notify, unlockAudio, vibrate } from '../alerts';
 import { loadingText } from '../engine/warmup';
 import { SUPERSET_SWITCH_SEC } from '../engine/timecut';
 
@@ -536,20 +536,23 @@ function RestTimerBar() {
     return () => clearInterval(t);
   }, []);
 
-  // Fire the end-of-rest alert once per timer, even if the tab was in the background.
+  // Fire the end-of-rest alert once per timer, even if the tab was in the background. The beep is booked ahead on
+  // the sound player's clock so it lands on 0:00 even when the phone slows the page's timers; moving, pausing or
+  // skipping the timer cancels it. If it couldn't be booked, the timer beeps itself when it fires.
   useEffect(() => {
     if (timer.endAt == null) return;
+    const ms = timer.endAt - Date.now();
+    const cancelBooked = sound && ms > 1500 ? bookBeep(timer.endAt) : null;
     const fire = () => {
       if (alerted.current === timer.endAt) return;
       alerted.current = timer.endAt;
       vibrate();
-      if (sound) beep();
+      if (sound && !cancelBooked) beep();
       if (document.visibilityState !== 'visible') void notify('Rest over — next set', timer.label, 'rest-timer');
     };
-    const ms = timer.endAt - Date.now();
     if (ms <= 0) { fire(); return; }
     const t = setTimeout(fire, ms);
-    return () => clearTimeout(t);
+    return () => { clearTimeout(t); if (Date.now() < timer.endAt! - 300) cancelBooked?.(); };
   }, [timer.endAt, timer.label, sound]);
 
   // Auto-hide a finished timer after a while.
