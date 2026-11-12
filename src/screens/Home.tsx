@@ -10,6 +10,7 @@ import { NumberField, Sheet, WeightInput } from '../components/ui';
 import { PHASE_COLOR } from '../components/plan';
 import { fmtBw, fmtRateW, fmtW } from '../format';
 import type { LifeEvent } from '../types';
+import { REBUILD_WEEK, rebuildHash } from '../engine/rebuildLink';
 
 const EVENT_LABEL: Record<LifeEvent['type'], string> = { ill: 'Ill', away: 'Away', sore: 'Too sore', other: 'Off' };
 
@@ -281,6 +282,7 @@ function WeekStrip({ week }: { week: PlanDay[] }) {
       {swaps.length > 0 && (
         <p className="tiny muted mt">{swaps.map(o => `${s.exerciseName(o.withTe.exerciseId)} → ${DAY_NAMES[parseYmd(o.date).getDay()]}`).join(' · ')} (this week only)</p>
       )}
+      <SendToRebuild />
       {open && (
         <Sheet open onClose={() => setOpen(null)} title={fmtDate(open.date, { weekday: 'long', day: 'numeric', month: 'short' })}>
           <div className="stack">
@@ -436,5 +438,23 @@ export function PlateauSheet({ open, onClose }: { open: boolean; onClose: () => 
         <p className="muted tiny center">If you say no, I'll ask again in a week.</p>
       </div>
     </Sheet>
+  );
+}
+
+/** Sends the gym plan to Rebuild Week (Jaden's planner) through the link. Lit up when the plan changed since the last send. */
+function SendToRebuild() {
+  const s = useStore();
+  const [justSent, setJustSent] = useState(false);
+  const hash = rebuildHash(s.settings, s.templates, s.lifeEvents, ymd());
+  const plan = hash.split('-').slice(1, 24).join('-'); // the plan part only
+  let sent = '';
+  try { sent = localStorage.getItem('rebuild-plan-sent') ?? ''; } catch { /* private mode */ }
+  const changed = plan !== sent && !justSent;
+  return (
+    <a className={`btn sm block mt ${changed ? 'primary' : 'ghost'}`} style={{ textDecoration: 'none' }}
+      href={REBUILD_WEEK + hash} target="_blank" rel="noopener"
+      onClick={() => { try { localStorage.setItem('rebuild-plan-sent', plan); } catch { /* ignore */ } setJustSent(true); }}>
+      {changed ? 'Plan changed · send it to Rebuild Week' : 'Rebuild Week has this plan ✓'}
+    </a>
   );
 }

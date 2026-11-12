@@ -5,9 +5,7 @@ import { daysBetween, fmtDate, ymd } from '../engine/dates';
 import { returningFromBreak } from '../engine/phases';
 import { fmtDuration, fmtLoad, fmtW } from '../format';
 import type { TemplateExercise, WorkoutSession } from '../types';
-
-// Jaden's planner. Finishing a workout here ticks gym there: one tap, no server, the link carries the date.
-const REBUILD_WEEK = 'https://claude.ai/artifact/JuTHHVCBrQcZ2ev4UWr3dq';
+import { REBUILD_WEEK, rebuildHash } from '../engine/rebuildLink';
 
 /** Decides whether to ask about repeating targets after a break, then starts the workout. */
 export function StartWorkout({ templateId, go }: { templateId: string; go: (r: string) => void }) {
@@ -43,6 +41,7 @@ export function Summary({ id, go }: { id: string; go: (r: string) => void }) {
   const templates = useStore(s => s.templates);
   const settings = useStore(s => s.settings);
   const name = useStore(s => s.exerciseName);
+  const events = useStore(s => s.lifeEvents);
   const session = sessions.find(s => s.id === id);
   if (!session) return <p className="muted">Session not found.</p>;
   const u = settings.units;
@@ -89,8 +88,8 @@ export function Summary({ id, go }: { id: string; go: (r: string) => void }) {
           </div>
         ))}
       </div>
-      {/* Rebuild Week counts this as that day's gym when it opens with #gym-YYYY-MM-DD. */}
-      <a className="btn primary block big" href={`${REBUILD_WEEK}#gym-${ymd(session.startedAt)}`} target="_blank" rel="noopener"
+      {/* Rebuild Week ticks that day's gym and takes the latest plan from this link. */}
+      <a className="btn primary block big" href={REBUILD_WEEK + rebuildHash(settings, templates, events, ymd(), ymd(session.startedAt))} target="_blank" rel="noopener"
         style={{ textDecoration: 'none' }} onClick={() => go('home')}>✓ Tick gym in Rebuild Week</a>
       <button className="btn block" onClick={() => go('home')}>Done</button>
     </div>
