@@ -253,6 +253,8 @@ export interface Settings {
   rampUntil?: string;
   /** Week 1 restarts on this date (set ahead, e.g. "start tomorrow"); cleared once it happens. */
   restartOn?: string;
+  /** One-off restarts already applied (by request id), so each happens once. */
+  restartsApplied?: string[];
   gistToken?: string;
   gistId?: string;
   lastBackupAt?: number;

@@ -40,6 +40,12 @@ function useBackgroundChecks() {
       const s = useStore.getState();
       // A restart booked for today (or a day that passed while the app was closed) happens now.
       if (s.settings.restartOn && s.settings.restartOn <= ymd()) s.restartFromToday(s.settings.restartOn);
+      // Asked on 24 Nov 2026 to start again at week 1 that day: applied once, on the first open up to the 26th.
+      const ONE_OFF = 'week1-2026-11-24';
+      if (s.settings.onboarded && !(s.settings.restartsApplied ?? []).includes(ONE_OFF) && ymd() >= '2026-11-24' && ymd() <= '2026-11-26') {
+        s.restartFromToday();
+        useStore.getState().setSettings({ restartsApplied: [...(s.settings.restartsApplied ?? []), ONE_OFF] });
+      }
       s.tickPhases();
       ensureWeeklyTargets(useStore.getState());
       const now = new Date();
