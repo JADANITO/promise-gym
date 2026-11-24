@@ -182,4 +182,14 @@ describe('fixing the start', () => {
     expect(S().settings.programLoadedOn).toBe('2026-11-09');
     expect(S().settings.rampUntil).toBe('2026-11-30');
   });
+
+  it('a restart booked for tomorrow starts week 1 that day', () => {
+    at('2026-11-02');
+    S().startNutritionPhase('bulk', 0.3, 'test', 74);
+    S().setSettings({ restartOn: '2026-11-25' });
+    S().restartFromToday('2026-11-25');
+    expect(S().currentNutritionPhase()!.startDate).toBe('2026-11-25');
+    expect(S().settings.rampUntil).toBe('2026-12-16');
+    expect(S().settings.restartOn).toBeUndefined();
+  });
 });

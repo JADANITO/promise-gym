@@ -498,9 +498,24 @@ function FinishSheet({ open, onClose, remainingSets, onDone }: { open: boolean; 
   const finish = useStore(s => s.finishWorkout);
   const discard = useStore(s => s.discardWorkout);
   const deload = useStore(s => s.active?.session.deload);
+  const ticked = useStore(s => (s.active ? s.active.session.exercises.flatMap(e => e.sets).filter(x => x.completed && !x.warmup).length : 0));
   const [saveToTemplate, setSave] = useState(false);
+  const [discardAsk, setDiscardAsk] = useState(false);
+  const close = () => { setDiscardAsk(false); onClose(); };
+  if (ticked === 0) {
+    // Nothing logged yet (usually started by mistake): the only sensible way out is to cancel it.
+    return (
+      <Sheet open={open} onClose={close} title="Cancel this workout?">
+        <div className="stack">
+          <p className="muted">No working sets are ticked yet, so there's nothing to save.</p>
+          <button className="btn danger block big" onClick={() => { discard(); onDone(null); }}>Cancel workout</button>
+          <button className="btn block" onClick={close}>Keep going</button>
+        </div>
+      </Sheet>
+    );
+  }
   return (
-    <Sheet open={open} onClose={onClose} title={remainingSets ? 'Leave this workout?' : 'Finish workout?'}>
+    <Sheet open={open} onClose={close} title={remainingSets ? 'Leave this workout?' : 'Finish workout?'}>
       <div className="stack">
         {remainingSets > 0 && <p className="muted">{remainingSets} working sets aren't ticked off. Exercises you didn't do won't change your progression.</p>}
         {!deload && (
@@ -512,8 +527,15 @@ function FinishSheet({ open, onClose, remainingSets, onDone }: { open: boolean; 
         <button className="btn primary block big" onClick={() => { const s = finish({ saveToTemplate }); onDone(s?.id ?? null); }}>
           {remainingSets ? 'Save as partial' : 'Finish & save'}
         </button>
-        <button className="btn block" onClick={onClose}>Keep going</button>
-        <button className="btn danger ghost block" onClick={() => { if (confirm('Discard this workout? Nothing will be saved.')) { discard(); onDone(null); } }}>Discard workout</button>
+        <button className="btn block" onClick={close}>Keep going</button>
+        {discardAsk ? (
+          <div className="row">
+            <button className="btn danger grow" onClick={() => { discard(); onDone(null); }}>Yes, discard {ticked} set{ticked === 1 ? '' : 's'}</button>
+            <button className="btn grow" onClick={() => setDiscardAsk(false)}>No</button>
+          </div>
+        ) : (
+          <button className="btn danger ghost block" onClick={() => setDiscardAsk(true)}>Discard workout</button>
+        )}
       </div>
     </Sheet>
   );

@@ -251,6 +251,8 @@ export interface Settings {
   lengthUnits: LengthUnits;
   /** Return-to-training ramp: faster rep progression until this date. */
   rampUntil?: string;
+  /** Week 1 restarts on this date (set ahead, e.g. "start tomorrow"); cleared once it happens. */
+  restartOn?: string;
   gistToken?: string;
   gistId?: string;
   lastBackupAt?: number;

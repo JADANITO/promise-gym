@@ -38,6 +38,8 @@ function useBackgroundChecks() {
   useEffect(() => {
     const check = async () => {
       const s = useStore.getState();
+      // A restart booked for today (or a day that passed while the app was closed) happens now.
+      if (s.settings.restartOn && s.settings.restartOn <= ymd()) s.restartFromToday(s.settings.restartOn);
       s.tickPhases();
       ensureWeeklyTargets(useStore.getState());
       const now = new Date();

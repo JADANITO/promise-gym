@@ -185,6 +185,7 @@ function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
   const s = useStore();
   const today = ymd();
   const [cantTrain, setCantTrain] = useState(false);
+  const [cancelAsk, setCancelAsk] = useState(false);
   const name = (id: string) => s.templates.find(t => t.id === id)?.name ?? 'Workout';
   const block = s.currentPhase();
   const hasSchedule = s.settings.schedule.some(Boolean);
@@ -196,11 +197,25 @@ function TodayCard({ go, week }: { go: (r: string) => void; week: PlanDay[] }) {
   const absToday = t?.exercises.some(e => s.exercise(e.exerciseId)?.primary?.includes('abs'));
 
   if (s.active) {
+    const ticked = s.active.session.exercises.flatMap(e => e.sets).filter(x => x.completed && !x.warmup).length;
     return (
       <div className="card accent stack">
         <p className="small muted bold">IN PROGRESS</p>
         <h2 className="bold" style={{ fontSize: 24 }}>{s.active.session.templateName}</h2>
-        <button className="btn primary big block" onClick={() => go('workout')}>Resume workout</button>
+        {cancelAsk ? (
+          <div className="stack" style={{ gap: 8 }}>
+            <p className="small">{ticked ? `Cancel this workout? The ${ticked} set${ticked === 1 ? '' : 's'} you ticked won't be saved.` : "Cancel this workout? Nothing's been ticked, so nothing is lost."}</p>
+            <div className="row">
+              <button className="btn danger grow" onClick={() => { s.discardWorkout(); setCancelAsk(false); }}>Yes, cancel it</button>
+              <button className="btn grow" onClick={() => setCancelAsk(false)}>Keep it</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <button className="btn primary big block" onClick={() => go('workout')}>Resume workout</button>
+            <button className="btn ghost sm block" onClick={() => setCancelAsk(true)}>{ticked ? 'Cancel workout' : 'Started by mistake? Cancel it'}</button>
+          </>
+        )}
       </div>
     );
   }

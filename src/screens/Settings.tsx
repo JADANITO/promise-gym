@@ -133,16 +133,22 @@ export function SettingsScreen({ go }: { go: (r: string) => void }) {
           Return-to-training ramp {st.rampUntil && st.rampUntil >= today ? `(until ${st.rampUntil})` : '(3 weeks of +2 rep jumps)'}
         </label>
         <p className="tiny muted">The PT switches phases at your Sunday check-in. Use these only to override.</p>
-        {plan.phase && (restartAsk ? (
+        {plan.phase && (st.restartOn && st.restartOn > ymd() ? (
+          <div className="card tight row between">
+            <p className="small">Week 1 starts {DAY_NAMES[new Date(st.restartOn + 'T12:00').getDay()]} ✓</p>
+            <button className="btn sm" onClick={() => { s.setSettings({ restartOn: undefined }); setMsg('Restart cancelled'); }}>Undo</button>
+          </div>
+        ) : restartAsk ? (
           <div className="card tight stack" style={{ gap: 8 }}>
-            <p className="small">Make today day 1 of week 1? Your {PHASE_LABEL[plan.phase.type].toLowerCase()}, training block and program all restart today, the return-to-training weeks start again, and your first Sunday check-in is next Sunday. Logged workouts, weights and food stay.</p>
+            <p className="small">Restart at week 1 today or tomorrow? Your {PHASE_LABEL[plan.phase.type].toLowerCase()}, training block and program all restart that day, the return-to-training weeks start again, and your first check-in is the Sunday after. Logged workouts, weights and food stay.</p>
             <div className="row">
-              <button className="btn primary grow" onClick={() => { s.restartFromToday(); setRestartAsk(false); setMsg('Week 1 starts today ✓'); }}>Yes, start today</button>
-              <button className="btn grow" onClick={() => setRestartAsk(false)}>Cancel</button>
+              <button className="btn primary grow" onClick={() => { s.restartFromToday(); setRestartAsk(false); setMsg('Week 1 starts today ✓'); }}>Today</button>
+              <button className="btn primary grow" onClick={() => { s.setSettings({ restartOn: addDays(ymd(), 1) }); setRestartAsk(false); setMsg('Week 1 starts tomorrow ✓'); }}>Tomorrow</button>
             </div>
+            <button className="btn ghost sm" onClick={() => setRestartAsk(false)}>Cancel</button>
           </div>
         ) : (
-          <button className="btn" onClick={() => setRestartAsk(true)}>Start week 1 today</button>
+          <button className="btn" onClick={() => setRestartAsk(true)}>Restart at week 1</button>
         ))}
       </div>
 
